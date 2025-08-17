@@ -1,0 +1,40 @@
+// src/types/angles.d.ts
+export interface AnglesData {
+  roll?: number;
+  pitch?: number;
+  yaw?: number;
+  AngleRoll?: number;
+  AnglePitch?: number;
+  AngleYaw?: number;
+  KalmanAngleRoll?: number;
+  KalmanAnglePitch?: number;
+  AngleRoll_est?: number;
+  AnglePitch_est?: number;
+  RateRoll?: number;
+  RatePitch?: number;
+  RateYaw?: number;
+  gyroRateRoll?: number;
+  gyroRatePitch?: number;
+  DesiredAngleRoll?: number;
+  DesiredAnglePitch?: number;
+  DesiredRateYaw?: number;
+  error_phi?: number;
+  error_theta?: number;
+  tau_x?: number;
+  tau_y?: number;
+  tau_z?: number;
+  InputThrottle?: number;
+  InputRoll?: number;
+  InputPitch?: number;
+  InputYaw?: number;
+  MotorInput1?: number;
+  MotorInput2?: number;
+  MotorInput3?: number;
+  MotorInput4?: number;
+  Altura?: number;
+  modo?: string;
+  modoActual?: string;
+  k1?: number;
+  k2?: number;
+  time?: string;
+}
