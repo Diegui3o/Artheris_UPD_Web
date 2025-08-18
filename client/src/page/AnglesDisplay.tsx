@@ -54,15 +54,39 @@ const DroneAngles = () => {
 
     socket.onmessage = (event) => {
       try {
-        const parsedMessage = JSON.parse(event.data);
-
-        if (parsedMessage.event === "angles") {
-          const data = parsedMessage.data;
-          console.log("📡 Datos recibidos:", data);
-          setAngles(data); // ⬅️ Guardamos los datos en el estado
+        const message = event.data;
+        let telemetryData: AnglesData;
+        
+        try {
+          const data = JSON.parse(message);
+          
+          // Handle both formats of the message
+          if (data && typeof data === 'object') {
+            // Case 1: Message has type and payload
+            if (data.type === 'telemetry' && data.payload) {
+              telemetryData = data.payload;
+            } 
+            // Case 2: Message is the telemetry data directly
+            else if ('roll' in data || 'pitch' in data || 'yaw' in data) {
+              telemetryData = data;
+            } else {
+              console.log('📦 Mensaje recibido (formato no reconocido):', data);
+              return;
+            }
+            
+            // Ensure we have valid data before updating state
+            if (telemetryData && Object.keys(telemetryData).length > 0) {
+              setAngles(prev => ({
+                ...prev,  // Preserve previous values
+                ...telemetryData  // Update with new values
+              }));
+            }
+          }
+        } catch (error) {
+          console.error('❌ Error al procesar el mensaje:', error);
         }
       } catch (err) {
-        console.error("Error parseando JSON:", err);
+        console.error("❌ Error en el manejador de mensajes:", err);
       }
     };
 

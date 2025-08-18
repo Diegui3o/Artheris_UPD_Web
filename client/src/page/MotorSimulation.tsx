@@ -1,5 +1,5 @@
 import { useEffect, useReducer } from "react";
-import SwitchControl from "./SwitchMode";
+import SwitchControl from "./ModeSwitch";
 import Plot from "react-plotly.js";
 import { AnglesData } from "../types/angles";
 
@@ -34,24 +34,57 @@ const MotorDashboard = () => {
 
     socket.onmessage = (event) => {
       try {
-        const nuevoDato: AnglesData = JSON.parse(event.data);
+        const message = event.data;
+        let telemetryData: AnglesData;
 
-        const datoFormateado: AnglesData = {
-          time: new Date().toLocaleTimeString(),
-          KalmanAngleRoll: Number(nuevoDato.KalmanAngleRoll) || 0,
-          KalmanAnglePitch: Number(nuevoDato.KalmanAnglePitch) || 0,
-          AngleYaw: Number(nuevoDato.AngleYaw) || 0,
-          AngleRoll: Number(nuevoDato.AngleRoll) || 0,
-          AnglePitch: Number(nuevoDato.AnglePitch) || 0,
-          MotorInput1: Number(nuevoDato.MotorInput1) || 1000,
-          MotorInput2: Number(nuevoDato.MotorInput2) || 1000,
-          MotorInput3: Number(nuevoDato.MotorInput3) || 1000,
-          MotorInput4: Number(nuevoDato.MotorInput4) || 1000,
-        };
+        try {
+          const data = JSON.parse(message);
 
-        dispatch({ type: "ADD_DATA", payload: [datoFormateado] });
+          // Handle both formats of the message
+          if (data && typeof data === "object") {
+            // Case 1: Message has type and payload
+            if (data.type === "telemetry" && data.payload) {
+              telemetryData = data.payload;
+            }
+            // Case 2: Message is the telemetry data directly
+            else if (
+              "roll" in data ||
+              "pitch" in data ||
+              "yaw" in data ||
+              "MotorInput1" in data ||
+              "MotorInput2" in data ||
+              "MotorInput3" in data ||
+              "MotorInput4" in data
+            ) {
+              telemetryData = data;
+            } else {
+              console.log("📦 Mensaje recibido (formato no reconocido):", data);
+              return;
+            }
+
+            const datoFormateado: AnglesData = {
+              time: new Date().toLocaleTimeString(),
+              KalmanAngleRoll: Number(telemetryData.KalmanAngleRoll) || 0,
+              KalmanAnglePitch: Number(telemetryData.KalmanAnglePitch) || 0,
+              AngleYaw:
+                Number(telemetryData.yaw ?? telemetryData.AngleYaw) || 0,
+              AngleRoll:
+                Number(telemetryData.roll ?? telemetryData.AngleRoll) || 0,
+              AnglePitch:
+                Number(telemetryData.pitch ?? telemetryData.AnglePitch) || 0,
+              MotorInput1: Number(telemetryData.MotorInput1) || 1000,
+              MotorInput2: Number(telemetryData.MotorInput2) || 1000,
+              MotorInput3: Number(telemetryData.MotorInput3) || 1000,
+              MotorInput4: Number(telemetryData.MotorInput4) || 1000,
+            };
+
+            dispatch({ type: "ADD_DATA", payload: [datoFormateado] });
+          }
+        } catch (error) {
+          console.error("❌ Error al procesar el mensaje:", error);
+        }
       } catch (err) {
-        console.error("Error parseando mensaje WebSocket:", err);
+        console.error("❌ Error en el manejador de mensajes:", err);
       }
     };
 

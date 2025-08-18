@@ -38,7 +38,7 @@ const colores: Record<string, string> = {
   KalmanAnglePitch: "#a73935",
   InputThrottle: "#FDD835",
   InputRoll: "#43A047",
-  InputPitch: "#FB8B00", // Corregido: código hexadecimal inválido
+  InputPitch: "#FB8B00",
   InputYaw: "#5E35B1",
   MotorInput1: "#F44336",
   MotorInput2: "#d84a75",
@@ -79,13 +79,46 @@ const MultiSensorDashboard = () => {
 
     socket.onmessage = (event) => {
       try {
-        const message = JSON.parse(event.data);
-        if (message.event === "angles" && message.data) {
-          console.log("Datos recibidos:", message.data); // Debug
-          dispatch({ type: "ADD_DATA", payload: [message.data] });
+        const message = event.data;
+        let telemetryData: AnglesData;
+
+        try {
+          const data = JSON.parse(message);
+
+          // Handle both formats of the message
+          if (data && typeof data === "object") {
+            // Case 1: Message has type and payload
+            if (data.type === "telemetry" && data.payload) {
+              telemetryData = data.payload;
+            }
+            // Case 2: Message is the telemetry data directly
+            else if (
+              "roll" in data ||
+              "pitch" in data ||
+              "yaw" in data ||
+              "MotorInput1" in data ||
+              "MotorInput2" in data ||
+              "MotorInput3" in data ||
+              "MotorInput4" in data
+            ) {
+              telemetryData = data;
+            } else {
+              console.log("📦 Mensaje recibido (formato no reconocido):", data);
+              return;
+            }
+
+            // Add timestamp if not present
+            const dataWithTime = {
+              ...telemetryData,
+              time: telemetryData.time || new Date().toLocaleTimeString(),
+            };
+            dispatch({ type: "ADD_DATA", payload: [dataWithTime] });
+          }
+        } catch (error) {
+          console.error("❌ Error al procesar el mensaje:", error);
         }
       } catch (err) {
-        console.error("Error parseando mensaje WebSocket:", err, event.data);
+        console.error("❌ Error en el manejador de mensajes:", err);
       }
     };
 
@@ -127,15 +160,7 @@ const MultiSensorDashboard = () => {
               },
               plugins: {
                 legend: {
-                  position: "top",
-                  labels: {
-                    color: "#fff",
-                    font: {
-                      size: 14,
-                      family: "Calibri, sans-serif",
-                      weight: 500,
-                    },
-                  },
+                  display: false,
                 },
                 tooltip: {
                   mode: "index",
@@ -144,15 +169,9 @@ const MultiSensorDashboard = () => {
               },
               scales: {
                 x: {
-                  ticks: {
-                    color: "#fff",
-                    font: {
-                      size: 12,
-                    },
-                  },
+                  display: false,
                   grid: {
-                    color: "rgba(255, 255, 255, 0.1)",
-                    display: true,
+                    display: false,
                   },
                 },
                 y: {

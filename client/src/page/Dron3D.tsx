@@ -16,14 +16,26 @@ function Drone({ anglesData, kalmanAngles }: DroneProps) {
 
   useFrame(() => {
     if (droneRef.current) {
+      // Set rotation order to YXZ for proper gimbal behavior (yaw, pitch, roll)
       droneRef.current.rotation.order = "YXZ";
+      
+      // Get angles with fallbacks in order of preference
+      const pitch = anglesData.AnglePitch_est ?? anglesData.AnglePitch ?? anglesData.pitch ?? kalmanAngles.pitch;
+      const yaw = anglesData.AngleYaw ?? anglesData.yaw ?? 0;
+      const roll = anglesData.AngleRoll_est ?? anglesData.AngleRoll ?? anglesData.roll ?? kalmanAngles.roll;
+      
+      // Apply rotations in YXZ order (yaw, pitch, roll)
       droneRef.current.rotation.set(
-        THREE.MathUtils.degToRad(
-          anglesData.AnglePitch_est ?? kalmanAngles.pitch
-        ),
-        THREE.MathUtils.degToRad(anglesData.yaw ?? anglesData.AngleYaw ?? 0),
-        THREE.MathUtils.degToRad(anglesData.AngleRoll_est ?? kalmanAngles.roll)
+        THREE.MathUtils.degToRad(pitch),  // X-axis rotation (pitch)
+        THREE.MathUtils.degToRad(yaw),    // Y-axis rotation (yaw)
+        THREE.MathUtils.degToRad(roll)    // Z-axis rotation (roll)
       );
+      
+      // Update kalmanAngles for reference by other components if needed
+      if (anglesData.AngleRoll_est !== undefined || anglesData.AnglePitch_est !== undefined) {
+        kalmanAngles.roll = roll;
+        kalmanAngles.pitch = pitch;
+      }
     }
   });
 
@@ -41,18 +53,38 @@ export default function Dron3D() {
 
     socket.onmessage = (event) => {
       try {
-        const parsed = JSON.parse(event.data);
-        if (parsed.event === "angles" && parsed.data) {
-          const data: AnglesData = parsed.data;
-          setAnglesData(data);
-
-          setKalmanAngles({
-            roll: data.AngleRoll_est ?? 0,
-            pitch: data.AnglePitch_est ?? 0,
-          });
+        const message = event.data;
+        let telemetryData: AnglesData;
+        
+        try {
+          const data = JSON.parse(message);
+          
+          // Handle both formats of the message
+          if (data && typeof data === 'object') {
+            // Case 1: Message has type and payload
+            if (data.type === 'telemetry' && data.payload) {
+              telemetryData = data.payload;
+            } 
+            // Case 2: Message is the telemetry data directly
+            else if ('roll' in data || 'pitch' in data || 'yaw' in data) {
+              telemetryData = data;
+            } else {
+              console.log('📦 Mensaje recibido (formato no reconocido):', data);
+              return;
+            }
+            
+            // Update the state with the new data
+            setAnglesData(telemetryData);
+            setKalmanAngles({
+              roll: telemetryData.AngleRoll_est ?? telemetryData.roll ?? 0,
+              pitch: telemetryData.AnglePitch_est ?? telemetryData.pitch ?? 0,
+            });
+          }
+        } catch (error) {
+          console.error('❌ Error al procesar el mensaje:', error);
         }
       } catch (err) {
-        console.error("Error parseando JSON:", err);
+        console.error("❌ Error en el manejador de mensajes:", err);
       }
     };
 

@@ -1,4 +1,3 @@
-// src/types/angles.d.ts
 export interface AnglesData {
   roll?: number;
   pitch?: number;
