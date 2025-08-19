@@ -18,8 +18,8 @@ async fn main() -> anyhow::Result<()> {
 
     // 🔹 Configuración UDP (PC escucha en 8889; ESP32 escucha en 8888)
     const LOCAL_PORT: u16 = 8889;                 // Puerto local de la PC (recibir telemetría)
-    const REMOTE_IP: &str = "192.168.1.35";       // IP fija del ESP32
-    const REMOTE_PORT: u16 = 8888;                // Puerto del ESP32 (comandos)
+    const REMOTE_IP: &str = "192.168.1.50"; // la IP fija del ESP32
+    const REMOTE_PORT: u16 = 8888;          // ESP32 escucha aquí
 
     let local_addr = format!("0.0.0.0:{}", LOCAL_PORT);
     let remote_addr: SocketAddr = format!("{}:{}", REMOTE_IP, REMOTE_PORT).parse().unwrap();

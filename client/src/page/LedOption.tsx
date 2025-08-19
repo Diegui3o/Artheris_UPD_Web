@@ -12,10 +12,18 @@ type AckMsg = {
   info?: string;
 };
 
-type LedEvent = {
+type ServerLedMessage = {
   type: "led";
-  id: number;
+  target: "all" | "one" | "many";
+  id?: number;
+  ids?: number[];
   value: boolean;
+};
+
+type AckMessage = {
+  type: string;
+  request_id?: string;
+  [key: string]: unknown;
 };
 
 function genRequestId() {
@@ -23,7 +31,7 @@ function genRequestId() {
 }
 
 export default function LedControl() {
-  const [ledCount, setLedCount] = useState<number>(3);
+  const [ledCount, setLedCount] = useState<number>(1);
   const [leds, setLeds] = useState<LedState>({ 1: false, 2: false, 3: false });
   const { isConnected, sendMessage, onMessage } = useWebSocket(
     "ws://localhost:9001"
@@ -34,40 +42,116 @@ export default function LedControl() {
     Map<string, { led: number; desired: boolean; revert?: () => void }>
   >(new Map());
 
+  // Handler único de mensajes entrantes
+  useEffect(() => {
+    const messageHandler = (data: unknown) => {
+      if (!data || typeof data !== "object") return;
+      const message = data as AckMessage;
+
+      // --- ACKs ---
+      if (message.type === "ack" && message.request_id) {
+        const op = pending.current.get(message.request_id);
+        if (op) {
+          const ackMsg = message as AckMsg;
+          if (ackMsg.ok !== true) {
+            op.revert?.();
+          }
+          pending.current.delete(message.request_id);
+        }
+        return;
+      }
+
+      // --- LED events ---
+      if (message.type === "led") {
+        const ledMsg = message as unknown as ServerLedMessage;
+
+        if (ledMsg.target === "all") {
+          setLeds((prev) => {
+            const next = { ...prev };
+            for (const k of Object.keys(next)) {
+              const n = Number(k);
+              if (!isNaN(n)) next[n] = ledMsg.value;
+            }
+            return next;
+          });
+          for (const [rid, op] of pending.current.entries()) {
+            if (op.desired === ledMsg.value) pending.current.delete(rid);
+          }
+        }
+
+        if (ledMsg.target === "one" && typeof ledMsg.id === "number") {
+          const ledId = ledMsg.id;
+          setLeds((prev) => ({ ...prev, [ledId]: ledMsg.value }));
+          for (const [rid, op] of pending.current.entries()) {
+            if (op.led === ledId && op.desired === ledMsg.value) {
+              pending.current.delete(rid);
+            }
+          }
+        }
+
+        if (ledMsg.target === "many" && Array.isArray(ledMsg.ids)) {
+          const idsArr = ledMsg.ids;
+          setLeds((prev) => {
+            const next = { ...prev };
+            for (const id of idsArr) next[id] = ledMsg.value;
+            return next;
+          });
+          for (const [rid, op] of pending.current.entries()) {
+            if (idsArr.includes(op.led) && op.desired === ledMsg.value) {
+              pending.current.delete(rid);
+            }
+          }
+        }
+      }
+    };
+
+    const cleanup = onMessage("*", messageHandler);
+    return () => cleanup();
+  }, [onMessage]);
+
   const toggleLed = (ledNumber: number) => {
+    // No permitir otra operación si hay una pendiente para ese LED
+    const hasPending = Array.from(pending.current.values()).some(
+      (op) => op.led === ledNumber
+    );
+    if (hasPending) {
+      console.log("Operation already in progress for LED", ledNumber);
+      return;
+    }
+
     const desired = !leds[ledNumber];
     const request_id = genRequestId();
 
     // Optimistic update
     setLeds((prev) => ({ ...prev, [ledNumber]: desired }));
 
-    // Guardamos cómo revertir si el ACK falla o no llega
-    const revert = () =>
+    // Cómo revertir si falla
+    const revert = () => {
       setLeds((prev) => ({ ...prev, [ledNumber]: !desired }));
+    };
+
     pending.current.set(request_id, { led: ledNumber, desired, revert });
 
-    // Enviar comando con el nuevo protocolo
     if (isConnected) {
-      // El hook asume { type, ...payload } y lo serializa
       sendMessage("command", {
-        request_id,
+        request_id, // nivel top
         payload: {
-          led: { id: ledNumber, state: desired }, // ← id y boolean
+          // comando directo
+          led: { id: ledNumber, state: desired },
         },
       });
-      // Si quieres timeout de seguridad (ej. 2.5s) para revertir:
+
+      // Timeout más corto para UX ágil en LAN
       setTimeout(() => {
-        const p = pending.current.get(request_id);
-        if (p) {
-          // No llegó ACK a tiempo → revertir y limpiar
-          p.revert?.();
+        const op = pending.current.get(request_id);
+        if (op) {
+          console.warn(`ACK timeout for LED ${ledNumber}, reverting...`);
+          op.revert?.();
           pending.current.delete(request_id);
-          console.warn(`ACK timeout para request_id=${request_id}`);
         }
-      }, 2500);
+      }, 1200);
     } else {
-      console.error("No hay conexión WebSocket");
-      // Revertir si no hay conexión
+      console.error("No WebSocket connection");
       revert();
       pending.current.delete(request_id);
     }
@@ -83,12 +167,13 @@ export default function LedControl() {
     if (ledCount > 1) {
       const ledToRemove = ledCount;
 
-      // Si está encendido, intenta apagarlo antes (no obligatorio)
       if (isConnected && leds[ledToRemove]) {
         const request_id = genRequestId();
         sendMessage("command", {
           request_id,
-          payload: { led: { id: ledToRemove, state: false } },
+          payload: {
+            led: { id: ledToRemove, state: false },
+          },
         });
       }
 
@@ -101,42 +186,15 @@ export default function LedControl() {
     }
   };
 
-  // Estado de conexión
+  // Si se desconecta, limpia operaciones pendientes
   useEffect(() => {
-    if (!isConnected)
-      console.log("Intentando conectar con el servidor WebSocket...");
+    if (!isConnected) {
+      for (const [rid, op] of pending.current.entries()) {
+        op.revert?.();
+        pending.current.delete(rid);
+      }
+    }
   }, [isConnected]);
-
-  // Escuchar ACKs del servidor
-  useEffect(() => {
-    const offAck = onMessage<AckMsg>("ack", (msg) => {
-      if (!msg?.request_id) return;
-      const p = pending.current.get(msg.request_id);
-      if (!p) return;
-
-      if (msg.ok) {
-        // Listo: mantenemos el estado como está
-        pending.current.delete(msg.request_id);
-      } else {
-        // Falló: revertimos
-        p.revert?.();
-        pending.current.delete(msg.request_id);
-        console.warn("ACK negativo:", msg.info);
-      }
-    });
-
-    // También escuchar eventos 'led' que el backend emite (sincr. de estado)
-    const offLed = onMessage<LedEvent>("led", (evt) => {
-      if (typeof evt?.id === "number" && typeof evt?.value === "boolean") {
-        setLeds((prev) => ({ ...prev, [evt.id]: evt.value }));
-      }
-    });
-
-    return () => {
-      offAck?.();
-      offLed?.();
-    };
-  }, [onMessage]);
 
   return (
     <div style={{ padding: "20px", maxWidth: "800px", margin: "0 auto" }}>

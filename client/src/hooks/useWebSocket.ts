@@ -27,46 +27,57 @@ const useWebSocket = (url: string): UseWebSocketReturn => {
   const INITIAL_RECONNECT_DELAY = 1000; // 1 segundo
 
   // Función para enviar mensajes
-  const sendMessage = useCallback(<T,>(type: MessageType, payload?: T): boolean => {
-    const socket = socketRef.current;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      const message: WebSocketMessage<T> = {
-        type,
-        payload: payload as T,
-        timestamp: Date.now(),
-      };
-      socket.send(JSON.stringify(message));
-      return true;
-    }
-    console.warn('WebSocket no está conectado');
-    return false;
-  }, []);
+  const sendMessage = useCallback(
+    <T = Record<string, unknown>>(type: MessageType, payload?: T): boolean => {
+      const socket = socketRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        const message = { 
+          type, 
+          ...(payload ? { payload } : {}), 
+          timestamp: Date.now() 
+        };
+        socket.send(JSON.stringify(message));
+        return true;
+      }
+      console.warn("WebSocket no está conectado");
+      return false;
+    },
+    []
+  );
 
   // Registrar manejadores de mensajes
-  const onMessage = useCallback(<T,>(
-    type: string,
-    handler: (data: T) => void
-  ) => {
-    if (!messageHandlersRef.current.has(type)) {
-      messageHandlersRef.current.set(type, new Set());
-    }
-    const handlers = messageHandlersRef.current.get(type)!;
-    
-    // Safe type assertion since we know this function will be called with correct types
-    const handlerWrapper = (data: unknown) => {
-      handler(data as T);
-    };
-    
-    handlers.add(handlerWrapper);
-
-    // Cleanup function
-    return () => {
-      handlers.delete(handlerWrapper);
-      if (handlers.size === 0) {
-        messageHandlersRef.current.delete(type);
+  const onMessage = useCallback(
+    <T = unknown>(type: MessageType, handler: (data: T) => void) => {
+      if (!messageHandlersRef.current.has(type)) {
+        messageHandlersRef.current.set(type, new Set());
       }
-    };
-  }, []);
+      const handlers = messageHandlersRef.current.get(type)!;
+      
+      const handlerWrapper = (data: unknown) => {
+        try {
+          // If data is a WebSocketMessage with payload, extract the payload
+          const messageData = data && typeof data === 'object' && 'payload' in data 
+            ? (data as { payload: unknown }).payload 
+            : data;
+          
+          handler(messageData as T);
+        } catch (error) {
+          console.error('Error in message handler:', error);
+        }
+      };
+      
+      handlers.add(handlerWrapper);
+
+      // Cleanup function
+      return () => {
+        handlers.delete(handlerWrapper);
+        if (handlers.size === 0) {
+          messageHandlersRef.current.delete(type);
+        }
+      };
+    },
+    []
+  );
 
   useEffect(() => {
     let reconnectTimeout: NodeJS.Timeout;
@@ -87,21 +98,38 @@ const useWebSocket = (url: string): UseWebSocketReturn => {
       
       ws.onmessage = (event) => {
         try {
-          const message = JSON.parse(event.data) as WebSocketMessage;
-          const handlers = messageHandlersRef.current.get(message.type);
+          const message = JSON.parse(event.data);
+          if (!message || typeof message !== 'object') return;
           
+          const { type } = message as { type?: MessageType };
+          if (!type) return;
+      
+          // Handle typed handlers
+          const handlers = messageHandlersRef.current.get(type);
           if (handlers) {
-            handlers.forEach(handler => {
+            const messageData = 'payload' in message ? message.payload : message;
+            handlers.forEach((handler) => {
               try {
-                // Usamos any aquí para evitar problemas de tipos con el handler genérico
-                (handler as (payload: unknown) => void)(message.payload);
-              } catch (error) {
-                console.error(`Error en el manejador para ${message.type}:`, error);
+                handler(messageData);
+              } catch (err) {
+                console.error(`Error en handler para ${type}:`, err);
+              }
+            });
+          }
+      
+          // Handle wildcard handlers
+          const anyHandlers = messageHandlersRef.current.get("*" as MessageType);
+          if (anyHandlers) {
+            anyHandlers.forEach((handler) => {
+              try {
+                handler(message);
+              } catch (err) {
+                console.error('Error en handler *:', err);
               }
             });
           }
         } catch (error) {
-          console.error('Error procesando mensaje:', error, event.data);
+          console.error("Error procesando mensaje:", error, event.data);
         }
       };
       
