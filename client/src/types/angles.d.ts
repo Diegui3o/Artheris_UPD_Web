@@ -35,5 +35,7 @@ export interface AnglesData {
   modoActual?: string;
   k1?: number;
   k2?: number;
+  g1?: number;
+  g2?: number;
   time?: string;
 }

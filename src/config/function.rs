@@ -4,6 +4,70 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
 
+/// Mapa de alias -> número
+fn mode_str_to_num(s: &str) -> Option<u8> {
+    let s = s.trim().to_ascii_lowercase();
+    match s.as_str() {
+        "pilot" | "piloto" => Some(0),
+        "idle"  | "espera" => Some(1),
+        "manual"           => Some(2),
+        // si te mandan "0", "1" o "2" como string
+        _ => s.parse::<u8>().ok().filter(|n| [0u8,1,2].contains(n)),
+    }
+}
+
+/// Envía modo como **número** si es posible (mejor para el ESP)
+pub async fn set_mode(
+    mode: &str, // acepta "pilot", "manual", "idle|espera", o "0|1|2"
+    esp32_socket: Option<Arc<UdpSocket>>,
+    remote_addr: SocketAddr,
+    ws_tx: &broadcast::Sender<String>,
+    request_id: Option<&str>,
+) {
+    // 1) Normaliza a número si podemos
+    let json_payload = if let Some(n) = mode_str_to_num(mode) {
+        json!({"type":"command","payload":{"mode": n}})
+    } else {
+        // fallback: envía string tal cual
+        json!({"type":"command","payload":{"mode": mode}})
+    };
+
+    let txt = json_payload.to_string();
+
+    // 2) Enviar por UDP
+    let mut ok = true;
+    if let Some(socket) = esp32_socket {
+        if let Err(e) = socket.send_to(txt.as_bytes(), remote_addr).await {
+            eprintln!("❌ Error enviando modo al ESP32: {}", e);
+            ok = false;
+        }
+    } else {
+        ok = false;
+    }
+
+    // 3) ACK opcional
+    if let Some(rid) = request_id {
+        let ack = if ok {
+            json!({"type":"ack","request_id": rid, "ok": true})
+        } else {
+            json!({"type":"ack","request_id": rid, "ok": false, "info":"udp_send_failed_or_missing_socket"})
+        };
+        let _ = ws_tx.send(ack.to_string());
+    }
+
+    // 4) Broadcast para tu UI (puedes mandar lo normalizado si quieres)
+    let emitted = mode_str_to_num(mode)
+        .map(|n| json!({"type":"modo","value": n}))
+        .unwrap_or_else(|| json!({"type":"modo","value": mode}));
+
+    let _ = ws_tx.send(emitted.to_string());
+
+    println!(
+        "📤 Enviando comando de MODO al ESP32: {}",
+        mode
+    );
+}
+
 pub async fn set_motor_one_speed(
     id: u32,
     us: u32,
@@ -245,38 +309,3 @@ pub async fn set_motors_state(
     println!("📤 Enviando comando de MOTORES al ESP32: {}", if motors_on { "ON" } else { "OFF" });
 }
 
-/// Cambia el modo y notifica
-pub async fn set_mode(
-    mode: &str,
-    esp32_socket: Option<Arc<UdpSocket>>,
-    remote_addr: SocketAddr,
-    ws_tx: &broadcast::Sender<String>,
-    request_id: Option<&str>, // 👈 nuevo
-) {
-    let command = format!(r#"{{"type":"command","payload":{{"mode":"{}"}}}}"#, mode);
-
-    let mut ok = true;
-    if let Some(socket) = esp32_socket {
-        if let Err(e) = socket.send_to(command.as_bytes(), remote_addr).await {
-            eprintln!("❌ Error enviando modo al ESP32: {}", e);
-            ok = false;
-        }
-    } else {
-        ok = false;
-    }
-
-    // ACK
-    if let Some(rid) = request_id {
-        let ack = if ok {
-            json!({"type":"ack","request_id": rid, "ok": true})
-        } else {
-            json!({"type":"ack","request_id": rid, "ok": false, "info":"udp_send_failed_or_missing_socket"})
-        };
-        let _ = ws_tx.send(ack.to_string());
-    }
-
-    // Evento de estado (broadcast)
-    let _ = ws_tx.send(json!({"type":"modo","value": mode}).to_string());
-
-    println!("📤 Enviando comando de MODO al ESP32: {}", mode);
-}

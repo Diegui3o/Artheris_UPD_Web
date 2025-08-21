@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { motion } from "framer-motion";
 import { FaPlus } from "react-icons/fa";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { AnimatedBackground } from "../components/AnimatedBackground";
+import { MotorCard } from "../components/MotorCard";
 
 type MotorKey = `motor${number}`;
 type OneMotor = { on: boolean; speed: number }; // µs (1000–2000)
@@ -49,6 +52,9 @@ export default function MotorControl() {
   // Velocidad global (para “todos a X µs”)
   const [globalSpeed, setGlobalSpeed] = useState<number>(DEFAULT_IDLE_US);
 
+  // Counter to force re-renders when motor states change
+  const [globalTick, setGlobalTick] = useState<number>(0);
+
   // Helper: envía { type:"command", payload: <MotorPayload> }
   const sendCmd = useCallback(
     (payload: MotorPayload) => {
@@ -73,6 +79,9 @@ export default function MotorControl() {
         [key]: { on: true, speed: us },
       }));
 
+      // Update globalTick to force re-render
+      setGlobalTick((prev) => prev + 1);
+
       // Firmware: {"type":"command","payload":{"motor":{"id":N,"speed":US}}}
       sendCmd({ motor: { id, speed: us } });
     },
@@ -86,6 +95,9 @@ export default function MotorControl() {
         ...prev,
         [key]: { on: false, speed: prev[key]?.speed ?? DEFAULT_IDLE_US },
       }));
+
+      // Update globalTick to force re-render
+      setGlobalTick((prev) => prev + 1);
 
       // Firmware: {"type":"command","payload":{"motor":{"id":N,"state":false}}}
       sendCmd({ motor: { id, state: false } });
@@ -134,22 +146,16 @@ export default function MotorControl() {
     for (let i = 1; i <= activeMotors; i++) {
       const key = `motor${i}` as MotorKey;
       const us = motorStatus[key]?.speed ?? DEFAULT_IDLE_US;
-      setOneMotorOn(i, us);
+      setTimeout(() => setOneMotorOn(i, us), (i - 1) * 70);
     }
   }, [activeMotors, motorStatus, setOneMotorOn]);
 
+  // Reemplaza turnAllOff con esta:
   const turnAllOff = useCallback(() => {
-    sendCmd({ motors: { state: false } });
-    // UI
-    setMotorStatus((prev) => {
-      const next: MotorState = { ...prev };
-      for (let i = 1; i <= activeMotors; i++) {
-        const k = `motor${i}` as MotorKey;
-        next[k] = { on: false, speed: prev[k]?.speed ?? DEFAULT_IDLE_US };
-      }
-      return next;
-    });
-  }, [activeMotors, sendCmd]);
+    for (let i = 1; i <= activeMotors; i++) {
+      setTimeout(() => setOneMotorOff(i), (i - 1) * 50);
+    }
+  }, [activeMotors, setOneMotorOff]);
 
   const setAllToSpeed = useCallback(
     (us: number) => {
@@ -173,6 +179,8 @@ export default function MotorControl() {
         }
         return next;
       });
+
+      setGlobalTick((prev) => prev + 1);
     },
     [activeMotors, motorStatus, sendCmd]
   );
@@ -227,232 +235,195 @@ export default function MotorControl() {
     );
   }, []);
 
-  const getMotorColorClass = useCallback((motorNum: number): string => {
-    const colors = [
-      "bg-indigo-500",
-      "bg-violet-500",
-      "bg-pink-500",
-      "bg-orange-500",
-      "bg-emerald-500",
-      "bg-yellow-500",
-    ];
-    return colors[(motorNum - 1) % colors.length];
-  }, []);
-
   return (
-    <div className="flex flex-col w-full space-y-4">
-      {/* Header */}
-      <div className="w-full">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
-              Control de Motores
-            </h1>
-            <p className="text-gray-400 mt-1">
-              Gestiona los motores del sistema
-            </p>
-          </div>
-          <div
-            className={`flex items-center gap-2 px-4 py-2 rounded-full ${
-              isConnected
-                ? "bg-green-900/30 text-green-400"
-                : "bg-red-900/30 text-red-400"
-            }`}
-          >
+    <div className="relative">
+      <AnimatedBackground />
+
+      <div className="flex flex-col w-full space-y-4">
+        {/* Header */}
+        <div className="w-full">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
+                Control de Motores
+              </h1>
+              <p className="text-gray-400 mt-1">
+                Gestiona los motores del sistema
+              </p>
+            </div>
             <div
-              className={`w-2.5 h-2.5 rounded-full ${
-                isConnected ? "bg-green-500" : "bg-red-500"
-              } animate-pulse`}
-            ></div>
-            <span className="text-sm font-medium">
-              {isConnected ? "Conectado" : "Desconectado"}
+              className={`flex items-center gap-2 px-4 py-2 rounded-full ${
+                isConnected
+                  ? "bg-green-900/30 text-green-400"
+                  : "bg-red-900/30 text-red-400"
+              }`}
+            >
+              <div
+                className={`w-2.5 h-2.5 rounded-full ${
+                  isConnected ? "bg-green-500" : "bg-red-500"
+                } animate-pulse`}
+              />
+              <span className="text-sm font-medium">
+                {isConnected ? "Conectado" : "Desconectado"}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Control general */}
+        <div className="w-full space-y-3">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-semibold text-white">
+                Control General
+              </h2>
+              <p className="text-gray-400 text-sm">
+                Gestiona todos los motores simultáneamente
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={turnAllOn}
+                disabled={!isConnected}
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium disabled:opacity-50"
+              >
+                Encender todos
+              </button>
+              <button
+                onClick={turnAllOff}
+                disabled={!isConnected}
+                className="px-5 py-2.5 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-medium disabled:opacity-50"
+              >
+                Apagar todos
+              </button>
+            </div>
+          </div>
+
+          {/* Enhanced Global Speed Control */}
+          <div className="rounded-xl p-4 bg-gradient-to-br from-black/20 to-black/40 border border-white/5 backdrop-blur-sm shadow-lg">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span className="text-white/90 text-sm font-medium">Velocidad Global</span>
+              </div>
+              <span className="text-white/90 font-mono text-sm px-2 py-1 bg-white/5 rounded-md">
+                {globalSpeed} µs
+              </span>
+            </div>
+
+            {/* Track with Gradient */}
+            <div className="relative h-3 w-full mb-6">
+              {/* Track background */}
+              <div className="absolute inset-0 bg-gray-800/50 rounded-full overflow-hidden">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent" />
+              </div>
+              
+              {/* Progress bar */}
+              <motion.div
+                className="absolute left-0 top-0 h-full rounded-full"
+                style={{
+                  width: `${((globalSpeed - MIN_US) / (MAX_US - MIN_US)) * 100}%`,
+                  background: 'linear-gradient(90deg, rgba(99,102,241,0.7), rgba(99,102,241,1))',
+                  boxShadow: '0 0 15px rgba(99,102,241,0.4)',
+                }}
+                transition={{ type: "spring", stiffness: 150, damping: 20 }}
+              >
+                {/* Glowing knob */}
+                <motion.div 
+                  className="absolute right-0 top-1/2 w-4 h-4 -mt-2 -mr-2 rounded-full bg-white"
+                  style={{
+                    boxShadow: '0 0 10px 2px rgba(99,102,241,0.8)',
+                  }}
+                  whileHover={{ scale: 1.3 }}
+                />
+              </motion.div>
+            </div>
+
+            {/* Hidden input for actual functionality */}
+            <input
+              type="range"
+              min={MIN_US}
+              max={MAX_US}
+              step={1}
+              value={globalSpeed}
+              onChange={(e) => setAllToSpeed(Number(e.target.value))}
+              disabled={!isConnected}
+              className="w-full h-1.5 bg-transparent appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-transparent [&::-webkit-slider-thumb]:border-0"
+              style={{
+                background: `linear-gradient(to right, transparent 0%, transparent ${((globalSpeed - MIN_US) / (MAX_US - MIN_US)) * 100}%, rgba(255,255,255,0.1) ${((globalSpeed - MIN_US) / (MAX_US - MIN_US)) * 100}%, rgba(255,255,255,0.1) 100%)`,
+              }}
+            />
+
+            {/* Min/Max labels */}
+            <div className="flex items-center justify-between mt-2 px-1">
+              <span className="text-xs text-white/60">{MIN_US} µs</span>
+              <span className="text-[11px] text-white/60 italic">
+                Aplica a todos los motores encendidos
+              </span>
+              <span className="text-xs text-white/60">{MAX_US} µs</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Controles individuales */}
+        <div className="w-full">
+          {/* (Opcional) Título y contador */}
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-lg font-semibold text-white">Motores</h2>
+            <span className="text-xs text-gray-400">
+              {activeMotors} motores
             </span>
           </div>
-        </div>
-      </div>
 
-      {/* Control general */}
-      <div className="w-full space-y-3">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-semibold text-white">
-              Control General
-            </h2>
-            <p className="text-gray-400 text-sm">
-              Gestiona todos los motores simultáneamente
-            </p>
+          {/* Cards */}
+          <div className="grid grid-cols-1 gap-4 w-full">
+            {Array.from({ length: activeMotors }).map((_, index) => {
+              const motorNum = index + 1;
+              const key = `motor${motorNum}` as MotorKey;
+              const st = motorStatus[key] ?? {
+                on: false,
+                speed: DEFAULT_IDLE_US,
+              };
+              return (
+                <MotorCard
+                  key={key}
+                  id={motorNum}
+                  isOn={st.on}
+                  speed={st.speed}
+                  min={MIN_US}
+                  max={MAX_US}
+                  color={getMotorColor}
+                  onToggle={toggleMotor}
+                  onSpeed={handleSpeedChange}
+                  disabled={!isConnected}
+                  globalTick={globalTick}
+                />
+              );
+            })}
           </div>
-          <div className="flex flex-wrap gap-3">
+
+          {/* Añadir/Quitar motores */}
+          <div className="flex gap-2 mt-3">
             <button
-              onClick={turnAllOn}
+              onClick={addMotor}
               disabled={!isConnected}
-              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium disabled:opacity-50"
+              className="flex-1 py-1.5 text-xs bg-blue-600/80 hover:bg-blue-700 border border-blue-500/50 rounded flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Encender todos
+              <FaPlus className="text-xs" />
+              Añadir motor
             </button>
-            <button
-              onClick={turnAllOff}
-              disabled={!isConnected}
-              className="px-5 py-2.5 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-medium disabled:opacity-50"
-            >
-              Apagar todos
-            </button>
-          </div>
-        </div>
-
-        {/* Velocidad global */}
-        <div className="rounded-lg p-4 bg-gray-700/40 border border-gray-600/40">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-white font-semibold">Velocidad Global</div>
-            <div className="text-white/70 text-sm">{globalSpeed} µs</div>
-          </div>
-          <input
-            type="range"
-            min={MIN_US}
-            max={MAX_US}
-            step={1}
-            value={globalSpeed}
-            onChange={(e) => setAllToSpeed(Number(e.target.value))}
-            disabled={!isConnected}
-            className="w-full accent-white/90"
-          />
-          <div className="text-xs text-gray-300 mt-1">
-            Aplica a todos: envía <code>{"{motors:{speed:US}}"}</code> al ESP32.
-          </div>
-        </div>
-      </div>
-
-      {/* Controles individuales */}
-      <div className="w-full">
-        <div className="flex justify-between items-center mb-3">
-          <h2 className="text-lg font-semibold text-white">Motores</h2>
-          <span className="text-xs text-gray-400">{activeMotors} motores</span>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 w-full">
-          {Array.from({ length: activeMotors }).map((_, index) => {
-            const motorNum = index + 1;
-            const key = `motor${motorNum}` as MotorKey;
-            const st = motorStatus[key] ?? {
-              on: false,
-              speed: DEFAULT_IDLE_US,
-            };
-            const isOn = st.on;
-
-            return (
-              <div
-                key={key}
-                className={`rounded-xl p-4 transition-all duration-300 w-full min-h-[120px] flex flex-row items-center gap-6 ${
-                  isOn ? "shadow-lg" : "hover:bg-gray-700/90"
-                }`}
-                style={{
-                  backgroundColor: isOn
-                    ? getMotorColor(motorNum, 0.9)
-                    : "rgba(55, 65, 81, 0.8)",
-                  border: isOn
-                    ? `1px solid ${getMotorColor(motorNum, 0.4)}`
-                    : "1px solid rgba(75, 85, 99, 0.3)",
-                  transform: isOn ? "translateY(-2px)" : "none",
-                  boxShadow: isOn
-                    ? `0 4px 20px -5px ${getMotorColor(motorNum, 0.3)}`
-                    : "none",
-                }}
+            {activeMotors > 1 && (
+              <button
+                onClick={removeMotor}
+                disabled={!isConnected}
+                className="flex-1 py-1.5 text-xs bg-red-600/80 hover:bg-red-700 border border-red-500/50 rounded flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <div className="flex-1">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-lg font-semibold text-white">
-                      Motor {motorNum}
-                    </span>
-                    <div
-                      className="w-3 h-3 rounded-full shadow-sm"
-                      style={{
-                        backgroundColor: isOn
-                          ? getMotorColor(motorNum, 1)
-                          : "rgb(248, 113, 113)",
-                      }}
-                    />
-                  </div>
-
-                  {/* Slider por motor */}
-                  <div className="rounded-md p-3 bg-black/10 border border-white/10 mb-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-white/90 text-sm">Velocidad</span>
-                      <span className="text-white/70 text-sm">
-                        {st.speed} µs
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={MIN_US}
-                      max={MAX_US}
-                      step={1}
-                      value={st.speed}
-                      onChange={(e) =>
-                        handleSpeedChange(motorNum, Number(e.target.value))
-                      }
-                      disabled={!isConnected}
-                      className="w-full accent-white/90"
-                    />
-                    <div className="text-[11px] text-white/60 mt-1">
-                      {isOn
-                        ? "Se envía {motor:{id,speed}} (con debounce)."
-                        : "Ajusta la velocidad; al encender se usará ese valor."}
-                    </div>
-                  </div>
-
-                  {/* Botones ON/OFF */}
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => toggleMotor(motorNum, true)}
-                      className={`flex-1 py-2 px-3 text-sm rounded-lg font-medium transition-all min-w-[100px] ${
-                        isOn
-                          ? "bg-white/10 text-white/90 border border-white/20"
-                          : `bg-white/5 text-white/90 hover:bg-white/10 border border-white/10 hover:border-white/20 ${getMotorColorClass(
-                              motorNum
-                            ).replace("bg-", "hover:bg-")}/20`
-                      } ${!isConnected ? "opacity-50 cursor-not-allowed" : ""}`}
-                      disabled={!isConnected || isOn}
-                    >
-                      {isOn ? "Encendido" : "Encender"}
-                    </button>
-
-                    <button
-                      onClick={() => toggleMotor(motorNum, false)}
-                      className={`flex-1 py-2 px-3 text-sm rounded-lg font-medium transition-all min-w-[100px] ${
-                        !isOn
-                          ? "bg-white/5 text-white/90 border border-white/10"
-                          : "bg-red-500/10 text-red-300 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/30"
-                      } ${!isConnected ? "opacity-50 cursor-not-allowed" : ""}`}
-                      disabled={!isConnected || !isOn}
-                    >
-                      Apagar
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Añadir/Quitar motores */}
-        <div className="flex gap-2 mt-3">
-          <button
-            onClick={addMotor}
-            disabled={!isConnected}
-            className="flex-1 py-1.5 text-xs bg-blue-600/80 hover:bg-blue-700 border border-blue-500/50 rounded flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <FaPlus className="text-xs" />
-            Añadir motor
-          </button>
-          {activeMotors > 1 && (
-            <button
-              onClick={removeMotor}
-              disabled={!isConnected}
-              className="flex-1 py-1.5 text-xs bg-red-600/80 hover:bg-red-700 border border-red-500/50 rounded flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Quitar motor
-            </button>
-          )}
+                Quitar motor
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
