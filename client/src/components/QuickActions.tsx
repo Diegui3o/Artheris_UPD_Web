@@ -70,11 +70,13 @@ export default function QuickActions({
     const newState = !toggleState.mpuCalib;
     setToggleState(prev => ({ ...prev, mpuCalib: newState }));
     sendJson({ 
-      type: "command", 
+      type: "command",
       payload: { 
-        calibrate: "mpu",
+        command: "calibrate",
+        target: "mpu",
         state: newState ? "on" : "off"
-      } 
+      },
+      request_id: Date.now().toString()
     });
   };
 
@@ -82,10 +84,12 @@ export default function QuickActions({
     const newState = !toggleState.orientation;
     setToggleState(prev => ({ ...prev, orientation: newState }));
     sendJson({ 
-      type: "command", 
+      type: "command",
       payload: { 
-        orient: newState ? "north" : "off"
-      } 
+        command: "orient",
+        direction: newState ? "north" : "reset"
+      },
+      request_id: Date.now().toString()
     });
   };
 
@@ -93,11 +97,13 @@ export default function QuickActions({
     const newState = !toggleState.motorsCalib;
     setToggleState(prev => ({ ...prev, motorsCalib: newState }));
     sendJson({ 
-      type: "command", 
+      type: "command",
       payload: { 
-        calibrate: "motors",
+        command: "calibrate",
+        target: "motors",
         state: newState ? "on" : "off"
-      } 
+      },
+      request_id: Date.now().toString()
     });
   };
 
@@ -106,14 +112,14 @@ export default function QuickActions({
   };
 
   const getButtonClass = (isActive: boolean, color: string) => {
-    const base = "w-full px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 " +
-                "focus:outline-none focus:ring-2 focus:ring-offset-2 " +
-                "disabled:opacity-50 disabled:cursor-not-allowed ";
+    const base = "w-full px-6 py-3 rounded-lg text-base font-semibold transition-all duration-200 " +
+                "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-opacity-50 " +
+                "disabled:opacity-50 disabled:cursor-not-allowed shadow-md ";
     
     if (isActive) {
-      return base + `bg-${color}-700 hover:bg-${color}-600 text-white focus:ring-${color}-400`;
+      return base + `bg-${color}-600 hover:bg-${color}-700 text-white focus:ring-${color}-400`;
     }
-    return base + `bg-gray-700 hover:bg-gray-600 text-white focus:ring-gray-400`;
+    return base + `bg-gray-700 hover:bg-gray-800 text-white focus:ring-gray-500`;
   };
 
   return (
