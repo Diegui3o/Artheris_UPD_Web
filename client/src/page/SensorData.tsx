@@ -138,10 +138,10 @@ const MultiSensorDashboard = () => {
           ),
           borderColor: colores[key] || "#FF0000", // Color rojo si no existe
           backgroundColor: (colores[key] || "#FF0000") + "33",
-          borderWidth: 3, // Aumentado para mejor visibilidad
-          tension: 0.4,
-          pointRadius: 2, // Aumentado para mejor visibilidad
-          pointHoverRadius: 5,
+          borderWidth: 2, // Aumentado para mejor visibilidad
+          tension: 0.5,
+          pointRadius: 1.2, // Aumentado para mejor visibilidad
+          pointHoverRadius: 4,
           fill: false,
         })),
       };
@@ -160,7 +160,15 @@ const MultiSensorDashboard = () => {
               },
               plugins: {
                 legend: {
-                  display: false,
+                  position: "top",
+                  labels: {
+                    color: "#fff",
+                    font: {
+                      size: 14,
+                      family: "Calibri, sans-serif",
+                      weight: 500,
+                    },
+                  },
                 },
                 tooltip: {
                   mode: "index",
@@ -176,7 +184,7 @@ const MultiSensorDashboard = () => {
                 },
                 y: {
                   ticks: {
-                    color: "#fff",
+                    color: "#666",
                     font: {
                       size: 12,
                     },
@@ -197,17 +205,22 @@ const MultiSensorDashboard = () => {
   );
 
   const renderBarChart = useCallback(
-    (keys: AngleKeys[], title: string) => {
+    (keys: Array<keyof AnglesData>, title: string) => {
       const lastData = data[data.length - 1];
+      if (!lastData) return null;
+
       const chartData = {
         labels: keys,
         datasets: [
           {
             label: title,
-            data: keys.map((key) =>
-              typeof lastData?.[key] === "number" ? lastData[key] : 0
+            data: keys.map((key) => {
+              const value = lastData[key];
+              return typeof value === "number" ? value : 0;
+            }),
+            backgroundColor: keys.map(
+              (key) => colores[key as keyof typeof colores] || "#000000"
             ),
-            backgroundColor: keys.map((key) => colores[key]),
             borderRadius: 6,
             barThickness: 40,
           },
@@ -263,7 +276,7 @@ const MultiSensorDashboard = () => {
     <div style={{ padding: "20px" }}>
       <div style={{ marginBottom: "20px" }}>
         <label htmlFor="chartSelect" style={{ marginRight: "10px" }}>
-          Seleccionar gráfica:
+          Select chart:
         </label>
         <select
           id="chartSelect"
