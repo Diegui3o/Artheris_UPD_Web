@@ -24,7 +24,14 @@ ChartJS.register(
   Legend
 );
 
-const colores: Record<string, string> = {
+const NON_NUMERIC_KEYS: Array<keyof AnglesData> = [
+  "modo",
+  "modoActual",
+  "time",
+  "throttle",
+];
+
+const colores: Partial<Record<keyof AnglesData, string>> = {
   AngleRoll: "#b07acc",
   pitch: "#3F51B5",
   yaw: "#FF5722",
@@ -52,6 +59,24 @@ const colores: Record<string, string> = {
   error_theta: "#3F51B5",
 };
 
+const getAvailableNumericKeys = (
+  rows: AnglesData[]
+): Array<keyof AnglesData> => {
+  const found = new Set<keyof AnglesData>();
+  for (const row of rows) {
+    for (const k in row) {
+      const key = k as keyof AnglesData;
+      if (NON_NUMERIC_KEYS.includes(key)) continue;
+      const v = row[key];
+      if (typeof v === "number" && Number.isFinite(v)) {
+        found.add(key);
+      }
+    }
+  }
+  // Orden alfabético para una UI estable
+  return Array.from(found).sort((a, b) => String(a).localeCompare(String(b)));
+};
+
 type AngleKeys = keyof AnglesData;
 
 type Action = { type: "ADD_DATA"; payload: AnglesData[] };
@@ -67,9 +92,24 @@ const dataReducer = (state: AnglesData[], action: Action): AnglesData[] => {
   }
 };
 
-const MultiSensorDashboard = () => {
-  const [data, dispatch] = useReducer(dataReducer, [] as AnglesData[]);
+const MultiSensorDashboard: React.FC = () => {
   const [selectedChart, setSelectedChart] = React.useState("Roll");
+  const [customKeys, setCustomKeys] = React.useState<Array<keyof AnglesData>>([]);
+  const [showCustomChart, setShowCustomChart] = React.useState(false);
+  const [data, dispatch] = useReducer(dataReducer, [] as AnglesData[]);
+
+  // Recalculate available numeric keys when data changes
+  const availableNumericKeys = React.useMemo(
+    () => getAvailableNumericKeys(data),
+    [data]
+  );
+
+  // Clean up custom keys if they're no longer in available keys
+  React.useEffect(() => {
+    setCustomKeys((prev) =>
+      prev.filter((k) => availableNumericKeys.includes(k))
+    );
+  }, [availableNumericKeys]);
 
   useEffect(() => {
     const socket = new WebSocket("ws://localhost:9001");
@@ -127,23 +167,54 @@ const MultiSensorDashboard = () => {
     };
   }, [dispatch]);
 
+  // Generate a consistent color for a key using a hash function
+  const getColorForKey = (key: string) => {
+    // Predefined color palette with good contrast
+    const colorPalette = [
+      '#4E79A7', // blue
+      '#F28E2B', // orange
+      '#E15759', // red
+      '#76B7B2', // teal
+      '#59A14F', // green
+      '#EDC948', // yellow
+      '#B07AA1', // purple
+      '#FF9DA7', // pink
+      '#9C755F', // brown
+      '#BAB0AC', // gray
+      '#17BECF', // cyan
+      '#BCBD22', // olive
+    ];
+    
+    // Use a simple hash to get a consistent color for each key
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = key.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    
+    // Use the hash to select a color from the palette
+    const colorIndex = Math.abs(hash) % colorPalette.length;
+    return colorPalette[colorIndex];
+  };
+
   const renderLineChart = useCallback(
-    (keys: AngleKeys[], title: string) => {
+    (keys: Array<keyof AnglesData>, title: string) => {
+      if (!data.length) return null;
+
       const chartData = {
-        labels: data.map((d: AnglesData) => d.time || ""),
-        datasets: keys.map((key) => ({
-          label: key,
-          data: data.map((d: AnglesData) =>
-            typeof d[key] === "number" ? d[key] : null
-          ),
-          borderColor: colores[key] || "#FF0000", // Color rojo si no existe
-          backgroundColor: (colores[key] || "#FF0000") + "33",
-          borderWidth: 2, // Aumentado para mejor visibilidad
-          tension: 0.5,
-          pointRadius: 1.2, // Aumentado para mejor visibilidad
-          pointHoverRadius: 4,
-          fill: false,
-        })),
+        labels: Array.from({ length: data.length }, (_, i) => i.toString()),
+        datasets: keys.map((key) => {
+          const color = getColorForKey(key as string);
+          return {
+            label: key,
+            data: data.map((d) => d[key] as number),
+            borderColor: color,
+            backgroundColor: `${color}40`,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.4,
+            fill: true,
+          };
+        }),
       };
 
       return (
@@ -206,20 +277,32 @@ const MultiSensorDashboard = () => {
 
   const renderBarChart = useCallback(
     (keys: Array<keyof AnglesData>, title: string) => {
+      if (!data.length) return null;
+
       const lastData = data[data.length - 1];
-      if (!lastData) return null;
+      const validKeys = keys.filter((key) => {
+        const value = lastData[key];
+        return typeof value === "number" && Number.isFinite(value);
+      });
+
+      if (validKeys.length === 0) {
+        return (
+          <div style={{ padding: "20px", color: "#fff", textAlign: "center" }}>
+            No hay datos numéricos disponibles para mostrar.
+          </div>
+        );
+      }
 
       const chartData = {
-        labels: keys,
+        labels: validKeys,
         datasets: [
           {
             label: title,
-            data: keys.map((key) => {
-              const value = lastData[key];
-              return typeof value === "number" ? value : 0;
-            }),
-            backgroundColor: keys.map(
-              (key) => colores[key as keyof typeof colores] || "#000000"
+            data: validKeys.map((key) => lastData[key] as number),
+            backgroundColor: validKeys.map(
+              (key) =>
+                colores[key as keyof typeof colores] ||
+                `#${Math.floor(Math.random() * 16777215).toString(16)}`
             ),
             borderRadius: 6,
             barThickness: 40,
@@ -278,27 +361,232 @@ const MultiSensorDashboard = () => {
         <label htmlFor="chartSelect" style={{ marginRight: "10px" }}>
           Select chart:
         </label>
-        <select
-          id="chartSelect"
-          onChange={(e) => setSelectedChart(e.target.value)}
-          value={selectedChart}
-          style={{
-            color: "black",
-            backgroundColor: "white",
-            padding: "5px",
-            borderRadius: "7px",
-            fontFamily: "helvetica",
-          }}
-        >
-          <option value="Roll">Roll Comparación</option>
-          <option value="Pitch">Pitch Comparación</option>
-          <option value="Rate">Rate Comparación</option>
-          <option value="Tau Comparación">Tau Comparación</option>
-          <option value="Input">Controles de Entrada</option>
-          <option value="Motor">Motores</option>
-          <option value="Altura">Altura</option>
-          <option value="Errores">Errores</option>
-        </select>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <select
+            id="chartSelect"
+            value={selectedChart}
+            onChange={(e) => setSelectedChart(e.target.value)}
+            style={{
+              padding: "8px 12px",
+              borderRadius: "4px",
+              border: "1px solid #666",
+              backgroundColor: "#222",
+              color: "#fff",
+              fontSize: "14px",
+              cursor: "pointer",
+              outline: "none",
+              fontFamily: "helvetica",
+              width: "100%",
+              maxWidth: "300px"
+            }}
+          >
+            <option value="Roll">Roll Comparación</option>
+            <option value="Pitch">Pitch Comparación</option>
+            <option value="Rate">Rate Comparación</option>
+            <option value="Tau Comparación">Tau Comparación</option>
+            <option value="Input">Controles de Entrada</option>
+            <option value="Motor">Motores</option>
+            <option value="Altura">Altura</option>
+            <option value="Errores">Errores</option>
+            <option value="Personalizado">Personalizado</option>
+          </select>
+          
+          {selectedChart === "Personalizado" && (
+            <div style={{ marginTop: '10px' }}>
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                <button
+                  onClick={() => setShowCustomChart(true)}
+                  disabled={customKeys.length === 0}
+                  style={{
+                    padding: '8px 16px',
+                    backgroundColor: customKeys.length > 0 ? '#4CAF50' : '#666',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: customKeys.length > 0 ? 'pointer' : 'not-allowed',
+                    opacity: customKeys.length > 0 ? 1 : 0.7
+                  }}
+                >
+                  Graficar
+                </button>
+                <button
+                  onClick={() => {
+                    setCustomKeys([]);
+                    setShowCustomChart(false);
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    backgroundColor: '#f44336',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Reiniciar
+                </button>
+              </div>
+              
+              {customKeys.length === 0 && (
+                <div style={{ padding: '12px', color: '#ddd', marginTop: '10px' }}>
+                  Selecciona al menos una serie y haz clic en 'Graficar'.
+                </div>
+              )}
+              
+              {showCustomChart && customKeys.length > 0 && (
+                <div style={{ width: '100%', minHeight: '300px', marginTop: '10px' }}>
+                  {renderLineChart(customKeys as AngleKeys[], "Gráfico personalizado")}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {selectedChart === "Personalizado" && (
+          <div style={{ margin: "10px 0 20px" }}>
+            <label
+              htmlFor="seriesSelect"
+              style={{ display: "block", marginBottom: 8 }}
+            >
+              Series disponibles (solo claves con números detectados):
+            </label>
+            <div style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ marginBottom: "5px", fontWeight: "500" }}>
+                  Series disponibles:
+                </div>
+                <select
+                  id="availableSeries"
+                  multiple
+                  size={Math.min(10, Math.max(4, availableNumericKeys.length))}
+                  style={{
+                    width: "100%",
+                    padding: "8px",
+                    borderRadius: "4px",
+                    border: "1px solid #666",
+                    backgroundColor: "#222",
+                    color: "#fff",
+                    fontFamily: "helvetica",
+                  }}
+                >
+                  {availableNumericKeys
+                    .filter((k) => !customKeys.includes(k))
+                    .map((k) => (
+                      <option
+                        key={String(k)}
+                        value={String(k)}
+                        onDoubleClick={() =>
+                          setCustomKeys((prev) => [...prev, k])
+                        }
+                        style={{ padding: "4px", cursor: "pointer" }}
+                      >
+                        {String(k)}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "center",
+                  gap: "10px",
+                }}
+              >
+                <button
+                  onClick={() => {
+                    const select = document.getElementById(
+                      "availableSeries"
+                    ) as HTMLSelectElement;
+                    const selected = Array.from(select.selectedOptions).map(
+                      (o) => o.value as keyof AnglesData
+                    );
+                    setCustomKeys((prev) => [...prev, ...selected]);
+                  }}
+                  style={{
+                    padding: "8px 12px",
+                    backgroundColor: "#3F51B5",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                  }}
+                >
+                  ➜
+                </button>
+                <button
+                  onClick={() => {
+                    const select = document.getElementById(
+                      "selectedSeries"
+                    ) as HTMLSelectElement;
+                    const selected = Array.from(select.selectedOptions).map(
+                      (o) => o.value as keyof AnglesData
+                    );
+                    setCustomKeys((prev) =>
+                      prev.filter((k) => !selected.includes(k))
+                    );
+                  }}
+                  style={{
+                    padding: "8px 12px",
+                    backgroundColor: "#f44336",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                  }}
+                >
+                  ←
+                </button>
+              </div>
+
+              <div style={{ flex: 1 }}>
+                <div style={{ marginBottom: "5px", fontWeight: "500" }}>
+                  Series seleccionadas:
+                </div>
+                <select
+                  id="selectedSeries"
+                  multiple
+                  size={Math.min(10, Math.max(4, customKeys.length))}
+                  style={{
+                    width: "100%",
+                    padding: "8px",
+                    borderRadius: "4px",
+                    border: "1px solid #666",
+                    backgroundColor: "#222",
+                    color: "#fff",
+                    fontFamily: "helvetica",
+                  }}
+                >
+                  {customKeys.map((k) => (
+                    <option
+                      key={String(k)}
+                      value={String(k)}
+                      onDoubleClick={() =>
+                        setCustomKeys((prev) => prev.filter((key) => key !== k))
+                      }
+                      style={{
+                        padding: "4px",
+                        cursor: "pointer",
+                        backgroundColor:
+                          colores[k as keyof typeof colores] || "#3F51B5",
+                        color: "#fff",
+                        borderRadius: "3px",
+                        margin: "2px 0",
+                      }}
+                    >
+                      {String(k)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div style={{ fontSize: 13, marginTop: 10, color: "#ddd" }}>
+              <div>• Haz doble clic en una serie para añadirla o quitarla</div>
+              <div>• Usa los botones para mover series entre las listas</div>
+              <div>• Las series seleccionadas se mostrarán en el gráfico</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {selectedChart === "Roll" &&

@@ -12,6 +12,9 @@ export interface AnglesData {
   RateRoll?: number;
   RatePitch?: number;
   RateYaw?: number;
+  GyroXdps?: number;
+  GyroYdps?: number;
+  GyroZdps?: number;
   gyroRateRoll?: number;
   gyroRatePitch?: number;
   DesiredAngleRoll?: number;
@@ -19,6 +22,9 @@ export interface AnglesData {
   DesiredRateYaw?: number;
   error_phi?: number;
   error_theta?: number;
+  ErrorRoll?: number;
+  ErrorPitch?: number;
+  ErrorYaw?: number;
   tau_x?: number;
   tau_y?: number;
   tau_z?: number;
