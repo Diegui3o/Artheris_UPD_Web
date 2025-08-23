@@ -143,7 +143,13 @@ export default function FlightAnalyticsPanel({ sample }: Props) {
             </div>
           </div>
         </div>
-
+        {/* THROTTLE ACTUAL */}
+        <div className="bg-gray-700/40 rounded-md p-3 border border-white/10 mb-3">
+          <p className="text-[12px] text-gray-300/80">Throttle</p>
+          <div className="text-sm text-white">
+            <b>{sample?.InputThrottle ?? 0}</b> μs
+          </div>
+        </div>
         {/* Historial compacto */}
         <div className="mt-3">
           <p className="text-xs text-gray-300/80 mb-2 flex items-center gap-2">

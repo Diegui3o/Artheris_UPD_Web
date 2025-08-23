@@ -38,4 +38,10 @@ export interface AnglesData {
   g1?: number;
   g2?: number;
   time?: string;
+  throttle?: {
+    label?: string;
+    value?: number;
+    startThreshold?: number;
+    endThreshold?: number;
+  };
 }

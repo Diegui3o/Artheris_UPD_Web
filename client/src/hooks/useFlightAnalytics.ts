@@ -1,170 +1,218 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AnglesData } from "../types/angles";
 
-/**
- * Tracks flight time and statistics based on throttle input.
- * - Considers "in flight" when InputThrottle is between 1300 and 2000
- * - Uses sample.timestamp if available, otherwise falls back to Date.now()
- * - Tracks roll and pitch deviations during flight
- */
 export type FlightSample = AnglesData & { timestamp?: number };
 
 export type FlightRecord = {
   startedAt: number;
   endedAt: number;
   durationSec: number;
+  startThrottle: number;
+  endThrottle: number;
   meanAbsRoll: number;
   meanAbsPitch: number;
 };
 
-export function useFlightAnalytics(sample?: FlightSample) {
-  // Flight detection thresholds (microseconds)
-  const THR_MIN = 1300;
-  const THR_MAX = 2000;
-  
-  // Minimum flight duration to be considered valid (milliseconds)
-  const MIN_FLIGHT_DURATION_MS = 1000; // 1 second
+const LS_TOTAL = "armeris:thr:totalSec";
+const LS_LAST = "armeris:thr:lastSec";
+const LS_HISTORY = "armeris:thr:history";
 
-  const [isFlying, setIsFlying] = useState(false);
-  const [currentFlightSec, setCurrentFlightSec] = useState(0);
-  const [totalFlightSec, setTotalFlightSec] = useState(0);
-  const [lastFlightSec, setLastFlightSec] = useState(0);
+/**
+ * Cuenta tiempo desde que InputThrottle >= 1100 hasta que InputThrottle >= 2000.
+ * Persiste totales e historial en localStorage.
+ */
+export function useThrottleAnalytics(sample?: FlightSample) {
+  // Umbrales
+  const THR_START = 1100;  // inicio de conteo
+  const THR_END   = 2000;  // fin de conteo
+  const MIN_SESSION_MS = 300; // descarta sesiones demasiado cortas (rebotes)
+
+  // Estado público
+  const [isCounting, setIsCounting] = useState(false);
+  const [currentSec, setCurrentSec] = useState(0);
+  const [totalSec, setTotalSec] = useState<number>(() => {
+    const s = localStorage.getItem(LS_TOTAL);
+    return s ? Number(s) || 0 : 0;
+  });
+  const [lastSec, setLastSec] = useState<number>(() => {
+    const s = localStorage.getItem(LS_LAST);
+    return s ? Number(s) || 0 : 0;
+  });
 
   const [meanAbsRoll, setMeanAbsRoll] = useState(0);
   const [meanAbsPitch, setMeanAbsPitch] = useState(0);
   const [lastMeanAbsRoll, setLastMeanAbsRoll] = useState(0);
   const [lastMeanAbsPitch, setLastMeanAbsPitch] = useState(0);
 
-  const [history, setHistory] = useState<FlightRecord[]>([]);
+  const [history, setHistory] = useState<FlightRecord[]>(() => {
+    const s = localStorage.getItem(LS_HISTORY);
+    if (!s) return [];
+    try { return JSON.parse(s) as FlightRecord[]; } catch { return []; }
+  });
 
-  // Acumuladores del vuelo actual
+  // Internos/refs para sesión actual
   const startTimeRef = useRef<number | null>(null);
   const prevTsRef = useRef<number | null>(null);
+  const startThrRef = useRef<number>(0);
+  const endThrRef = useRef<number>(0);
   const sumAbsRollRef = useRef(0);
   const sumAbsPitchRef = useRef(0);
   const countRef = useRef(0);
 
-  // Detecta si la muestra indica vuelo
-  const flyingNow = useMemo(() => {
-    const thr = sample?.InputThrottle ?? 0;
-    return thr >= THR_MIN && thr <= THR_MAX;
-  }, [sample]);
+  // Etiqueta legible para el throttle
+  const throttleValue = sample?.InputThrottle ?? 0;
+  const throttleLabel = useMemo(() => {
+    const thr = throttleValue;
+    if (thr >= THR_END) return "Máximo (FULL)";
+    if (thr >= 1700) return "Alto";
+    if (thr >= 1300) return "Medio";
+    if (thr >= THR_START) return "Arranque/Despegue";
+    if (thr > 0) return "Bajo/Idle";
+    return "—";
+  }, [throttleValue]);
+
+  // Persistencia de totales/historial
+  useEffect(() => {
+    localStorage.setItem(LS_TOTAL, String(totalSec));
+  }, [totalSec]);
 
   useEffect(() => {
-    const ts = sample?.timestamp ?? Date.now();
+    localStorage.setItem(LS_LAST, String(lastSec));
+  }, [lastSec]);
 
-    // Arranque de vuelo
-    if (!isFlying && flyingNow) {
-      setIsFlying(true);
+  useEffect(() => {
+    localStorage.setItem(LS_HISTORY, JSON.stringify(history.slice(-100)));
+  }, [history]);
+
+  // Lógica principal
+  useEffect(() => {
+    const ts = sample?.timestamp ?? Date.now();
+    const thr = throttleValue;
+
+    // Inicio de sesión
+    if (!isCounting && thr >= THR_START) {
+      setIsCounting(true);
       startTimeRef.current = ts;
       prevTsRef.current = ts;
+      startThrRef.current = thr;
       sumAbsRollRef.current = 0;
       sumAbsPitchRef.current = 0;
       countRef.current = 0;
-      setCurrentFlightSec(0);
+      setCurrentSec(0);
       setMeanAbsRoll(0);
       setMeanAbsPitch(0);
       return;
     }
 
-    // Vuelo en curso
-    if (isFlying && flyingNow) {
+    // Sesión en curso
+    if (isCounting) {
       const prev = prevTsRef.current ?? ts;
       const dtSec = Math.max(0, (ts - prev) / 1000);
       prevTsRef.current = ts;
 
-      // Avanza tiempo de vuelo actual
-      setCurrentFlightSec((s) => s + dtSec);
+      // acumula tiempo actual
+      setCurrentSec((s) => s + dtSec);
 
-      // Acumula desviaciones absolutas (si hay datos)
+      // acumula medias si hay ángulos disponibles
       const r = Math.abs(sample?.KalmanAngleRoll ?? 0);
       const p = Math.abs(sample?.KalmanAnglePitch ?? 0);
       sumAbsRollRef.current += r;
       sumAbsPitchRef.current += p;
       countRef.current += 1;
 
-      // Actualiza medias del vuelo actual
       const n = countRef.current || 1;
       setMeanAbsRoll(sumAbsRollRef.current / n);
       setMeanAbsPitch(sumAbsPitchRef.current / n);
-      return;
-    }
 
-    // Flight end detection
-    if (isFlying && !flyingNow) {
-      const start = startTimeRef.current ?? ts;
-      const durationMs = ts - start;
-      
-      // Only record flights that lasted longer than minimum duration
-      if (durationMs >= MIN_FLIGHT_DURATION_MS) {
-        const durSec = durationMs / 1000;
-        
-        // Calculate final means
-        const n = countRef.current || 1;
-        const mRoll = sumAbsRollRef.current / n;
-        const mPitch = sumAbsRollRef.current / n;
+      // ¿Finaliza?
+      if (thr >= THR_END) {
+        const start = startTimeRef.current ?? ts;
+        const durationMs = ts - start;
 
-        // Update flight statistics
-        setLastFlightSec(durSec);
-        setTotalFlightSec((t) => t + durSec);
-        setLastMeanAbsRoll(mRoll);
-        setLastMeanAbsPitch(mPitch);
+        if (durationMs >= MIN_SESSION_MS) {
+          const durSec = durationMs / 1000;
+          const nFinal = countRef.current || 1;
+          const mRoll = sumAbsRollRef.current / nFinal;
+          const mPitch = sumAbsPitchRef.current / nFinal; // <- corregido (antes usabas sumAbsRollRef)
 
-        // Add to flight history
-        setHistory((h) => [
-          ...h,
-          {
-            startedAt: start,
-            endedAt: ts,
-            durationSec: durSec,
-            meanAbsRoll: mRoll,
-            meanAbsPitch: mPitch,
-          },
-        ].slice(-100)); // Keep only last 100 flights
+          endThrRef.current = thr;
+
+          // publicar estadísticas
+          setLastSec(durSec);
+          setTotalSec((t) => t + durSec);
+          setLastMeanAbsRoll(mRoll);
+          setLastMeanAbsPitch(mPitch);
+
+          setHistory((h) =>
+            [
+              ...h,
+              {
+                startedAt: start,
+                endedAt: ts,
+                durationSec: durSec,
+                startThrottle: startThrRef.current,
+                endThrottle: endThrRef.current,
+                meanAbsRoll: mRoll,
+                meanAbsPitch: mPitch,
+              },
+            ].slice(-100)
+          );
+        }
+
+        // reset sesión
+        setIsCounting(false);
+        startTimeRef.current = null;
+        prevTsRef.current = null;
+        sumAbsRollRef.current = 0;
+        sumAbsPitchRef.current = 0;
+        countRef.current = 0;
+        setCurrentSec(0);
+        setMeanAbsRoll(0);
+        setMeanAbsPitch(0);
       }
 
-      // Reset flight state
-      setIsFlying(false);
-      startTimeRef.current = null;
-      prevTsRef.current = null;
-      sumAbsRollRef.current = 0;
-      sumAbsPitchRef.current = 0;
-      countRef.current = 0;
-      setCurrentFlightSec(0);
-      setMeanAbsRoll(0);
-      setMeanAbsPitch(0);
       return;
     }
 
-    // No vuelo y sigue sin vuelo → solo actualiza ts
-    if (!isFlying && !flyingNow) {
+    // No contando: sólo mantén el timestamp previo
+    if (!isCounting) {
       prevTsRef.current = ts;
     }
-  }, [sample, flyingNow, isFlying]);
+  }, [sample, isCounting, throttleValue]);
 
-  const resetTotals = useCallback(
-    () => {
-      setTotalFlightSec(0);
-      setLastFlightSec(0);
-      setHistory([]);
-    },
-    []
-  );
+  const resetTotals = useCallback(() => {
+    setTotalSec(0);
+    setLastSec(0);
+    setLastMeanAbsRoll(0);
+    setLastMeanAbsPitch(0);
+    setHistory([]);
+    localStorage.setItem(LS_TOTAL, "0");
+    localStorage.setItem(LS_LAST, "0");
+    localStorage.setItem(LS_HISTORY, "[]");
+  }, []);
 
   return {
-    // Estado
-    isFlying,
-    currentFlightSec,
-    lastFlightSec,
-    totalFlightSec,
+    // Estado de sesión
+    isCounting,
+    currentSec,
+    lastSec,
+    totalSec,
 
-    // Desviaciones (|media|)
+    // Desviaciones
     meanAbsRoll,
     meanAbsPitch,
     lastMeanAbsRoll,
     lastMeanAbsPitch,
 
-    // Historial de vuelos
+    // Throttle actual
+    throttle: {
+      value: throttleValue,
+      label: throttleLabel,
+      startThreshold: THR_START,
+      endThreshold: THR_END,
+    },
+
+    // Historial
     history,
 
     // Utils
