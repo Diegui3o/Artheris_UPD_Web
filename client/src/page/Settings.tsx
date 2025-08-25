@@ -252,16 +252,29 @@ export default function TelemetryLoggerSettings() {
     setApplying(true);
     setServerMsg(null);
     try {
+      console.log("Sending config:", JSON.stringify(loggerConfig, null, 2));
       const res = await fetch("/api/logger/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(loggerConfig),
       });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Server error response:", res.status, errorText);
+        throw new Error(
+          `HTTP error! status: ${res.status}, body: ${errorText}`
+        );
+      }
+
       const data = (await res.json()) as { status?: string; flightId?: string };
+      console.log("Config applied successfully:", data);
       setServerMsg(`Configuración aplicada (${data?.status ?? "ok"})`);
     } catch (error) {
       console.error("Failed to apply configuration:", error);
-      setServerMsg("No se pudo aplicar la configuración");
+      setServerMsg(
+        `Error: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
     } finally {
       setApplying(false);
     }
@@ -272,12 +285,26 @@ export default function TelemetryLoggerSettings() {
     setRecording(true);
     setServerMsg(null);
     try {
+      console.log(
+        "Starting recording with config:",
+        JSON.stringify(loggerConfig, null, 2)
+      );
       const res = await fetch("/api/recordings/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(loggerConfig),
       });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Start recording error:", res.status, errorText);
+        throw new Error(
+          `HTTP error! status: ${res.status}, body: ${errorText}`
+        );
+      }
+
       const data = (await res.json()) as { status?: string; flightId?: string };
+      console.log("Recording started:", data);
       setFlightId(data?.flightId ?? null);
       setServerMsg(
         `Grabación iniciada${
@@ -286,7 +313,9 @@ export default function TelemetryLoggerSettings() {
       );
     } catch (error) {
       console.error("Failed to start recording:", error);
-      setServerMsg("No se pudo iniciar la grabación");
+      setServerMsg(
+        `Error: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
       setRecording(false);
     }
   };
@@ -627,14 +656,9 @@ export default function TelemetryLoggerSettings() {
         )}
       </div>
 
-      {/* Previsualización del payload que se envía al backend */}
+      {/* Previsualización del datos, tablas graficas, metricas de datos de vuelo */}
       <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 text-sm overflow-x-auto">
-        <div className="mb-2 font-medium text-gray-200">
-          Payload de configuración
-        </div>
-        <pre className="text-gray-300 whitespace-pre-wrap">
-          {JSON.stringify(loggerConfig, null, 2)}
-        </pre>
+        <GrapMetrics />
       </div>
     </div>
   );

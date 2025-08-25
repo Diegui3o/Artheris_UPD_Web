@@ -1,13 +1,10 @@
-use std::net::SocketAddr;
 use std::sync::Arc;
-
+use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, RwLock};
-use tokio::io::{AsyncBufReadExt, BufReader};
-
+use tokio::io::BufReader;
 use std::env;
-
-use tracing::{info, error, warn, debug};
+use tracing::{info, warn, error};
 use tracing_subscriber::{EnvFilter, fmt};
 use tracing_appender::rolling;
 
@@ -69,10 +66,7 @@ async fn main() -> anyhow::Result<()> {
         let db = OptionalDb::new(questdb_config.clone());
 
         match QuestDb::connect(questdb_config.clone()).await {
-            Ok(conn) => {
-                {
-                    use tokio::sync::Mutex;
-                }
+            Ok(_conn) => {
                 info!("✅ Conectado a QuestDB");
                 db
             }
@@ -113,12 +107,23 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // WS server
-    let ws_server = tokio::spawn({
+    let _ws_server = tokio::spawn({
         let ctx = ws_ctx.clone();
         async move {
             info!("🔌 Iniciando servidor WebSocket en ws://0.0.0.0:9001");
             start_ws_server(ctx).await;
             info!("✅ Servidor WebSocket detenido");
+        }
+    });
+
+    // HTTP server
+    let _http_server = tokio::spawn({
+        let ctx = ws_ctx.clone();
+        async move {
+            info!("🌍 Iniciando servidor HTTP en http://0.0.0.0:3000");
+            if let Err(e) = start_http_server(ctx).await {
+                error!("❌ Error en el servidor HTTP: {}", e);
+            }
         }
     });
 
@@ -152,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
 
                             if let Some(flog) = to_store {
                                 let fid_opt = { flight_state.read().await.clone() };
-                                if let Some(fid) = fid_opt {
+                                if let Some(ref fid) = fid_opt {
                                     if let Err(e) = qdb_writer.insert_flight_log(&fid, &flog.to_string()).await {
                                         error!("❌ Error guardando telemetría en QuestDB: {e}");
                                     }
