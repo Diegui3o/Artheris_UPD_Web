@@ -28,7 +28,7 @@ const NON_NUMERIC_KEYS: Array<keyof AnglesData> = [
   "modo",
   "modoActual",
   "time",
-  "throttle",
+  "InputThrottle",
 ];
 
 const colores: Partial<Record<keyof AnglesData, string>> = {
@@ -94,7 +94,9 @@ const dataReducer = (state: AnglesData[], action: Action): AnglesData[] => {
 
 const MultiSensorDashboard: React.FC = () => {
   const [selectedChart, setSelectedChart] = React.useState("Roll");
-  const [customKeys, setCustomKeys] = React.useState<Array<keyof AnglesData>>([]);
+  const [customKeys, setCustomKeys] = React.useState<Array<keyof AnglesData>>(
+    []
+  );
   const [showCustomChart, setShowCustomChart] = React.useState(false);
   const [data, dispatch] = useReducer(dataReducer, [] as AnglesData[]);
 
@@ -171,26 +173,26 @@ const MultiSensorDashboard: React.FC = () => {
   const getColorForKey = (key: string) => {
     // Predefined color palette with good contrast
     const colorPalette = [
-      '#4E79A7', // blue
-      '#F28E2B', // orange
-      '#E15759', // red
-      '#76B7B2', // teal
-      '#59A14F', // green
-      '#EDC948', // yellow
-      '#B07AA1', // purple
-      '#FF9DA7', // pink
-      '#9C755F', // brown
-      '#BAB0AC', // gray
-      '#17BECF', // cyan
-      '#BCBD22', // olive
+      "#4E79A7", // blue
+      "#F28E2B", // orange
+      "#E15759", // red
+      "#76B7B2", // teal
+      "#59A14F", // green
+      "#EDC948", // yellow
+      "#B07AA1", // purple
+      "#FF9DA7", // pink
+      "#9C755F", // brown
+      "#BAB0AC", // gray
+      "#17BECF", // cyan
+      "#BCBD22", // olive
     ];
-    
+
     // Use a simple hash to get a consistent color for each key
     let hash = 0;
     for (let i = 0; i < key.length; i++) {
       hash = key.charCodeAt(i) + ((hash << 5) - hash);
     }
-    
+
     // Use the hash to select a color from the palette
     const colorIndex = Math.abs(hash) % colorPalette.length;
     return colorPalette[colorIndex];
@@ -361,7 +363,7 @@ const MultiSensorDashboard: React.FC = () => {
         <label htmlFor="chartSelect" style={{ marginRight: "10px" }}>
           Select chart:
         </label>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
           <select
             id="chartSelect"
             value={selectedChart}
@@ -377,7 +379,7 @@ const MultiSensorDashboard: React.FC = () => {
               outline: "none",
               fontFamily: "helvetica",
               width: "100%",
-              maxWidth: "300px"
+              maxWidth: "300px",
             }}
           >
             <option value="Roll">Roll Comparación</option>
@@ -390,21 +392,23 @@ const MultiSensorDashboard: React.FC = () => {
             <option value="Errores">Errores</option>
             <option value="Personalizado">Personalizado</option>
           </select>
-          
+
           {selectedChart === "Personalizado" && (
-            <div style={{ marginTop: '10px' }}>
-              <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+            <div style={{ marginTop: "10px" }}>
+              <div
+                style={{ display: "flex", gap: "10px", marginBottom: "10px" }}
+              >
                 <button
                   onClick={() => setShowCustomChart(true)}
                   disabled={customKeys.length === 0}
                   style={{
-                    padding: '8px 16px',
-                    backgroundColor: customKeys.length > 0 ? '#4CAF50' : '#666',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: customKeys.length > 0 ? 'pointer' : 'not-allowed',
-                    opacity: customKeys.length > 0 ? 1 : 0.7
+                    padding: "8px 16px",
+                    backgroundColor: customKeys.length > 0 ? "#4CAF50" : "#666",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: customKeys.length > 0 ? "pointer" : "not-allowed",
+                    opacity: customKeys.length > 0 ? 1 : 0.7,
                   }}
                 >
                   Graficar
@@ -415,27 +419,38 @@ const MultiSensorDashboard: React.FC = () => {
                     setShowCustomChart(false);
                   }}
                   style={{
-                    padding: '8px 16px',
-                    backgroundColor: '#f44336',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer'
+                    padding: "8px 16px",
+                    backgroundColor: "#f44336",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: "pointer",
                   }}
                 >
                   Reiniciar
                 </button>
               </div>
-              
+
               {customKeys.length === 0 && (
-                <div style={{ padding: '12px', color: '#ddd', marginTop: '10px' }}>
+                <div
+                  style={{ padding: "12px", color: "#ddd", marginTop: "10px" }}
+                >
                   Selecciona al menos una serie y haz clic en 'Graficar'.
                 </div>
               )}
-              
+
               {showCustomChart && customKeys.length > 0 && (
-                <div style={{ width: '100%', minHeight: '300px', marginTop: '10px' }}>
-                  {renderLineChart(customKeys as AngleKeys[], "Gráfico personalizado")}
+                <div
+                  style={{
+                    width: "100%",
+                    minHeight: "300px",
+                    marginTop: "10px",
+                  }}
+                >
+                  {renderLineChart(
+                    customKeys as AngleKeys[],
+                    "Gráfico personalizado"
+                  )}
                 </div>
               )}
             </div>
