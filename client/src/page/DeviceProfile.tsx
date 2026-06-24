@@ -1,0 +1,257 @@
+import type { Vuelo } from "../types";
+
+// El tipo de los datos de cada vuelo (ajusta según tu backend real)
+type DatosVuelo = {
+  InputThrottle?: number | string;
+  Altitude?: number;
+  [key: string]: number | string | undefined;
+};
+
+type VueloConDatos = Vuelo & {
+  datos?: DatosVuelo[];
+  duracion?: number | string;
+};
+
+function TiempoVueloInputThrottle({ vuelos }: { vuelos: VueloConDatos[] }) {
+  let totalSegundos = 0;
+  let muestras = 0;
+  vuelos.forEach((vuelo) => {
+    if (Array.isArray(vuelo.datos)) {
+      vuelo.datos.forEach((d) => {
+        const throttle = Number(d.InputThrottle);
+        if (throttle >= 1400 && throttle <= 2000) {
+          totalSegundos += 1;
+        }
+        muestras++;
+      });
+    }
+  });
+  const minutos = (totalSegundos / 60).toFixed(1);
+  return (
+    <div className="text-gray-200 text-sm">
+      <b>Tiempo de vuelo (InputThrottle 1400-2000):</b>{" "}
+      {muestras > 0 ? `${minutos} min` : "--"}
+    </div>
+  );
+}
+
+function DetallesInteresantes({ vuelos }: { vuelos: VueloConDatos[] }) {
+  const numVuelos = vuelos.length;
+  let maxAltura = 0;
+  let maxDuracion = 0;
+  vuelos.forEach((vuelo) => {
+    if (Array.isArray(vuelo.datos)) {
+      (vuelo.datos ?? []).forEach((d) => {
+        if (typeof d.Altitude === "number" && d.Altitude > maxAltura)
+          maxAltura = d.Altitude;
+      });
+    }
+    if (vuelo.duracion) {
+      const dur =
+        typeof vuelo.duracion === "string"
+          ? parseFloat(vuelo.duracion)
+          : vuelo.duracion;
+      if (typeof dur === "number" && dur > maxDuracion) maxDuracion = dur;
+    }
+  });
+  return (
+    <div className="mt-3 text-gray-300 text-sm">
+      <div>
+        <b>Número de vuelos:</b> {numVuelos}
+      </div>
+      <div>
+        <b>Máxima altura registrada:</b> {maxAltura ? `${maxAltura} m` : "--"}
+      </div>
+      <div>
+        <b>Vuelo más largo:</b>{" "}
+        {maxDuracion ? `${(maxDuracion / 60).toFixed(1)} min` : "--"}
+      </div>
+    </div>
+  );
+}
+
+import React, { useEffect, useState } from "react";
+import type { DeviceProfile } from "../types";
+import {
+  fetchDeviceProfile,
+  updateDeviceProfile,
+  fetchDeviceFlights,
+} from "../utils/deviceApi";
+
+interface DeviceProfileProps {
+  deviceId: string;
+}
+
+const DeviceProfile: React.FC<DeviceProfileProps> = ({ deviceId }) => {
+  const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(
+    null
+  );
+  const [flights, setFlights] = useState<VueloConDatos[]>([]);
+  const [nuevoNombre, setNuevoNombre] = useState("");
+  const [cargandoPerfil, setCargandoPerfil] = useState(false);
+  const [mensaje, setMensaje] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCargandoPerfil(true);
+    setError(null);
+    fetchDeviceProfile(deviceId)
+      .then((profile: DeviceProfile) => {
+        setDeviceProfile(profile);
+        setNuevoNombre(profile.nombre || "");
+        setCargandoPerfil(false);
+      })
+      .catch(() => {
+        setError("No se pudo cargar el perfil del dispositivo");
+        setCargandoPerfil(false);
+      });
+    fetchDeviceFlights(deviceId)
+      .then((result: VueloConDatos[] | { flights: VueloConDatos[] }) => {
+        if (Array.isArray(result)) {
+          setFlights(result);
+        } else if (
+          result &&
+          Array.isArray((result as { flights?: VueloConDatos[] }).flights)
+        ) {
+          setFlights((result as { flights: VueloConDatos[] }).flights);
+        } else {
+          setFlights([]);
+        }
+      })
+      .catch(() => setFlights([]));
+  }, [deviceId]);
+
+  // --- WebSocket para datos en tiempo real desde Rust ---
+  useEffect(() => {
+    const socket = new WebSocket("ws://localhost:9001");
+    socket.onopen = () => {
+      console.log("✅ Conectado al WebSocket Rust");
+    };
+    socket.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        if (parsed.event === "angles" && parsed.data) {
+          // Si quieres agregar el vuelo recibido a la lista
+          setFlights((prev) => [
+            ...prev,
+            {
+              id: Date.now().toString(), // O usa algún identificador real
+              datos: [parsed.data],
+            } as unknown as VueloConDatos,
+          ]);
+        }
+      } catch (err) {
+        console.error("❌ Error al parsear mensaje WS:", err, event.data);
+      }
+    };
+    socket.onerror = (err) => {
+      console.error("❌ Error en WebSocket Rust:", err);
+    };
+    socket.onclose = () => {
+      console.log("🔌 WebSocket Rust cerrado");
+    };
+    return () => socket.close();
+  }, []);
+
+  const handleSave = async () => {
+    if (!deviceProfile) return;
+    setCargandoPerfil(true);
+    setMensaje(null);
+    setError(null);
+    try {
+      const updated = await updateDeviceProfile(
+        deviceProfile.id,
+        nuevoNombre,
+        deviceProfile.skin || ""
+      );
+      setDeviceProfile((prev) =>
+        prev ? { ...prev, nombre: updated.nombre } : prev
+      );
+      setMensaje("Perfil actualizado");
+    } catch {
+      setError("Error al actualizar el perfil");
+    } finally {
+      setCargandoPerfil(false);
+    }
+  };
+
+  if (cargandoPerfil && !deviceProfile) {
+    return <div className="text-gray-200 p-6">Cargando perfil...</div>;
+  }
+
+  if (error) {
+    return <div className="text-red-400 p-6">{error}</div>;
+  }
+
+  if (!deviceProfile) {
+    return (
+      <div className="text-gray-400 p-6">
+        Selecciona un dispositivo para ver el perfil.
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-xl mx-auto p-6 bg-gray-900 rounded-xl shadow-lg mt-6 relative">
+      <h2 className="text-2xl font-bold text-white mb-2">
+        {deviceProfile.nombre}
+        {deviceProfile.conectado && (
+          <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-green-400 border-2 border-white/80 flex items-center justify-center text-xs text-white font-bold">
+            ●
+          </span>
+        )}
+      </h2>
+      <div className="text-gray-200 text-sm mb-1">
+        <b>ID:</b> {deviceProfile.id}
+      </div>
+      <div className="text-gray-200 text-sm mb-1">
+        <b>Firmware:</b> {deviceProfile.firmware || "--"}
+      </div>
+      <input
+        className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white font-bold text-lg mb-1 w-full"
+        value={nuevoNombre}
+        disabled={cargandoPerfil}
+        onChange={(e) => setNuevoNombre(e.target.value)}
+        placeholder="Nombre del dispositivo"
+      />
+      <input
+        className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white text-sm mb-1 w-full"
+        value={deviceProfile.descripcion ?? ""}
+        onChange={(e) =>
+          setDeviceProfile((prev) =>
+            prev ? { ...prev, descripcion: e.target.value } : prev
+          )
+        }
+        placeholder="Descripción"
+      />
+      <input
+        className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white text-xs w-full"
+        value={deviceProfile.propietario ?? ""}
+        onChange={(e) =>
+          setDeviceProfile((prev) =>
+            prev ? { ...prev, propietario: e.target.value } : prev
+          )
+        }
+        placeholder="Propietario"
+      />
+      <button
+        className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded disabled:opacity-60 mt-2"
+        disabled={nuevoNombre === deviceProfile.nombre || cargandoPerfil}
+        onClick={handleSave}
+      >
+        Guardar
+      </button>
+      {mensaje && <div className="text-green-400 mt-2">{mensaje}</div>}
+      {error && <div className="text-red-400 mt-2">{error}</div>}
+      {flights.length === 0 && (
+        <div className="text-yellow-400 mt-4">
+          Este dispositivo aún no ha registrado vuelos.
+        </div>
+      )}
+      <TiempoVueloInputThrottle vuelos={flights} />
+      <DetallesInteresantes vuelos={flights} />
+    </div>
+  );
+};
+
+export default DeviceProfile;

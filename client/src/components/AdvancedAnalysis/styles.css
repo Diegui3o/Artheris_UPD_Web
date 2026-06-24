@@ -1,0 +1,34 @@
+/* Animaciones para el análisis avanzado */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.3s ease-out;
+}
+
+/* Scrollbar personalizado para los paneles */
+.advanced-analysis-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.advanced-analysis-scroll::-webkit-scrollbar-track {
+  background: #1f2937;
+  border-radius: 3px;
+}
+
+.advanced-analysis-scroll::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 3px;
+}
+
+.advanced-analysis-scroll::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
