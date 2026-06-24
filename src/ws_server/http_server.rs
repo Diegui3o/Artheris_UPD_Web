@@ -39,7 +39,6 @@ use crate::config::handlers::{
     compare_flight_groups,
     analyze_flight_trend,
 };
-use crate::simulation::{SimulationConfig, TrajectoryType, SimulationResult, run_simulation, run_batch_simulation};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,8 +151,6 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/flights/:id/historical-comparison", get(get_flight_historical_comparison))
         .route("/api/flights/compare-groups", get(compare_flight_groups))
         .route("/api/flights/trend/:flight_type", get(analyze_flight_trend))
-        .route("/api/simulation/run", post(run_simulation_endpoint))
-        .route("/api/simulation/batch", post(run_batch_simulation_endpoint))
         .with_state(state)
         .layer(
             CorsLayer::new()
@@ -710,60 +707,4 @@ pub async fn get_stats(
         "channel_depth": stats.channel_depth.load(Ordering::Relaxed),
         "last_flush_ns": stats.last_flush_instant_ns.load(Ordering::Relaxed),
     }))
-}
-
-
-#[derive(Deserialize)]
-struct SimulationRequest {
-    trajectory_type: Option<String>,
-    duration_sec: Option<f64>,
-    amplitude_deg: Option<f64>,
-    sample_rate_hz: Option<f64>,
-    accel_noise: Option<f64>,
-    gyro_noise: Option<f64>,
-    gyro_bias: Option<f64>,
-    misalignment: Option<f64>,
-    vibration_factor: Option<f64>,
-    jitter: Option<f64>,
-}
-
-async fn run_simulation_endpoint(
-    State(_state): State<Arc<AppState>>,
-    Json(req): Json<SimulationRequest>,
-) -> Result<Json<SimulationResult>, ApiError> {
-    let trajectory_type = match req.trajectory_type.as_deref() {
-        Some("step") => TrajectoryType::Step,
-        Some("composite") => TrajectoryType::Composite,
-        Some("random") => TrajectoryType::RandomWalk,
-        Some("impulse") => TrajectoryType::Impulse,
-        _ => TrajectoryType::Sinusoidal,
-    };
-    
-    let mut config = SimulationConfig {
-        trajectory_type,
-        duration_sec: req.duration_sec.unwrap_or(30.0),
-        max_amplitude_deg: req.amplitude_deg.unwrap_or(10.0),
-        sample_rate_hz: req.sample_rate_hz.unwrap_or(100.0),
-        ..Default::default()
-    };
-    
-    if let Some(v) = req.accel_noise { config.accel_noise_density = v; }
-    if let Some(v) = req.gyro_noise { config.gyro_noise_density = v; }
-    if let Some(v) = req.gyro_bias { config.gyro_bias_drift = v; }
-    if let Some(v) = req.misalignment { config.misalignment_deg = v; }
-    if let Some(v) = req.vibration_factor { config.vibration_aliasing_factor = v; }
-    if let Some(v) = req.jitter { config.sampling_jitter_ratio = v; }
-    
-    let result = run_simulation(config).await
-        .map_err(|e| ApiError::Internal(format!("Error en simulación: {}", e)))?;
-    
-    Ok(Json(result))
-}
-
-async fn run_batch_simulation_endpoint(
-    State(_state): State<Arc<AppState>>,
-) -> Result<Json<Vec<SimulationResult>>, ApiError> {
-    let results = run_batch_simulation().await
-        .map_err(|e| ApiError::Internal(format!("Error en batch: {}", e)))?;
-    Ok(Json(results))
 }

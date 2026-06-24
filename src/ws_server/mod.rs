@@ -3,6 +3,7 @@ mod ilp;
 pub mod questdb;
 mod stats;
 pub mod server;
+pub mod ilp_tcp;
 
 // Re-export commonly used types
 pub use questdb::OptionalDb;

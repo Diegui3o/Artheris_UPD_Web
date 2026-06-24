@@ -14,12 +14,12 @@ use tokio_postgres::types::ToSql;
 
 use crate::models::experiment_metadata::ExperimentMetadata;
 use crate::config::metrics::FullFlightMetrics;
-use crate::ws_server::ilp::{IlpHttp, choose_timestamp_ns};
+use crate::ws_server::ilp_tcp::{IlpTcp, choose_timestamp_ns};
 
 #[derive(Clone, Debug)]
 pub struct QuestDb {
     inner: Arc<Mutex<Option<Client>>>,
-    ilp: Arc<IlpHttp>,
+    ilp: Arc<IlpTcp>,  // ← Cambiado
     table_name: Arc<String>,
     time_col: Arc<String>,
     config: Arc<Mutex<QuestDbConfig>>,
@@ -82,8 +82,8 @@ impl QuestDb {
             }
         };
 
-        let ilp = Arc::new(IlpHttp::new(
-            std::env::var("QDB_ILP_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".into()),
+        let ilp = Arc::new(IlpTcp::new(
+            std::env::var("QDB_ILP_ADDR").unwrap_or_else(|_| "127.0.0.1:9009".into()),
             &table_name,
         ));
         
@@ -198,90 +198,72 @@ impl QuestDb {
             let mut ts_ns: Option<i64> = None;
             let mut fields = serde_json::Map::new();
 
-            for (k, v) in obj {
-                // timestamp
-                if let Some(tf) = ts_field {
-                    if k == tf {
-                        if let Some(s) = v.as_str() {
-                            // ISO8601 → ns
-                            ts_ns = Some(choose_timestamp_ns(Some(s)));
-                        } else if let Some(n) = v.as_i64() {
-                            // epoch ns
-                            ts_ns = Some(n);
-                        }
-                        continue;
+        for (k, v) in obj {
+            // timestamp
+            if let Some(tf) = ts_field {
+                if k == tf {
+                    if let Some(s) = v.as_str() {
+                        ts_ns = Some(choose_timestamp_ns(Some(s)));
+                    } else if let Some(n) = v.as_i64() {
+                        ts_ns = Some(n);
                     }
-                }
-
-                // evita duplicar tags
-                if matches!(k.as_str(), "flight_id" | "schema_version" | "mode") {
                     continue;
-                }
-
-                let key = k.as_str();
-
-                if v.is_number() {
-                    let (key_norm, val_norm) = match key {
-                        // mapeos previos que ya tenías
-                        "AngleYaw" => ("Yaw", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                        "gyroRatePitch" => ("RatePitch", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                        "gyroRateRoll"  => ("RateRoll",  serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                    
-                        // motores → float
-                        "MotorInput1" | "MotorInput2" | "MotorInput3" | "MotorInput4" => {
-                            (key, serde_json::json!(v.as_f64().unwrap_or(0.0)))
-                        }
-                    
-                        // NUEVO: variables con decimales (DOUBLE) redondeadas a 2dp
-                        "m" | "g" | "k" | "m1" | "m2" | "m3" | "m4" => {
-                            let f = v.as_f64().unwrap_or(0.0);
-                            (key, serde_json::json!(round2(f))) // DOUBLE (con 2 decimales)
-                        }
-
-                        "phi_ref" => ("phi_ref", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                        "theta_ref" => ("theta_ref", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                        "KalmanAngleRoll" => ("KalmanAngleRoll", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                        "KalmanAnglePitch" => ("KalmanAnglePitch", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                        "Motor1" => ("Motor1", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                        "Motor2" => ("Motor2", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                        "Motor3" => ("Motor3", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-                        "Motor4" => ("Motor4", serde_json::json!(v.as_f64().unwrap_or(0.0))),
-
-                        // NUEVO (si tienes variantes tipo 'm_kg' u otras): ejemplo de prefijo 'm' + dígitos
-                        _ if key.starts_with('m') && key[1..].chars().all(|c| c.is_ascii_digit()) => {
-                            let f = v.as_f64().unwrap_or(0.0);
-                            (key, serde_json::json!(round2(f)))
-                        }
-                    
-                        // errores → float
-                        "error_phi" | "error_theta" => {
-                            (key, serde_json::json!(v.as_f64().unwrap_or(0.0)))
-                        }
-                    
-                        // inputs discretos → enteros (LONG)
-                        "InputThrottle" | "InputRoll" | "InputPitch" | "InputYaw" => {
-                            let ival = if let Some(i) = v.as_i64() {
-                                i
-                            } else {
-                                v.as_f64().unwrap_or(0.0).round() as i64
-                            };
-                            (key, serde_json::json!(ival))
-                        }
-                    
-                        // por defecto: conserva tipo
-                        _ => (key, v.clone()),
-                    };
-                    
-                    // evita duplicar tags
-                    if matches!(key_norm, "flight_id" | "schema_version" | "mode") {
-                        continue;
-                    }
-                
-                    fields.insert(key_norm.to_string(), val_norm);
                 }
             }
 
-            if fields.is_empty() {
+            // evita duplicar tags
+            if matches!(k.as_str(), "flight_id" | "schema_version" | "mode") {
+                continue;
+            }
+
+            let key = k.as_str();
+
+            if v.is_number() {
+                let (key_norm, val_norm) = if let Some(i) = v.as_i64() {
+                    match key {
+                        "InputThrottle" | "InputRoll" | "InputPitch" | "InputYaw" 
+                        | "rx_timestamp_ns" | "sample_count" => {
+                            (key, serde_json::json!(i))
+                        }
+                        _ => {
+                            (key, serde_json::json!(i as f64))
+                        }
+                    }
+                } else if let Some(f) = v.as_f64() {
+                    let val = match key {
+                        "m" | "g" | "k" | "m1" | "m2" | "m3" | "m4" => {
+                            serde_json::json!(round2(f))
+                        }
+                        _ => {
+                            serde_json::json!(f)
+                        }
+                    };
+                    
+                    let key_norm = match key {
+                        "AngleYaw" => "Yaw",
+                        "gyroRatePitch" => "RatePitch",
+                        "gyroRateRoll" => "RateRoll",
+                        other => other,
+                    };
+                    
+                    (key_norm, val)
+                } else {
+                    (key, v.clone())
+                };
+                
+                // evita duplicar tags
+                if !matches!(key_norm, "flight_id" | "schema_version" | "mode") {
+                    fields.insert(key_norm.to_string(), val_norm);
+            }
+        } 
+    }
+        fields.insert("flight_id".to_string(), serde_json::json!(flight_id));
+        fields.insert("schema_version".to_string(), serde_json::json!(schema_version));
+        if let Some(m) = mode {
+            fields.insert("mode".to_string(), serde_json::json!(m));
+        }
+
+        if fields.is_empty() {
                 tracing::warn!(
                     "ingest_skip[{}]: no había campos numéricos; keys={:?}",
                     i,
@@ -316,35 +298,147 @@ impl QuestDb {
         self.ilp.write_lines(lines).await
     }
     
-    async fn ensure_schema(&self) -> Result<()> {
-        let tbl = &*self.table_name;
-        let tsc = &*self.time_col;
-    
+async fn ensure_schema(&self) -> Result<()> {
+    let tbl = &*self.table_name;
+    let tsc = &*self.time_col;
+
+    let guard = self.inner.lock().await;
+    let client = guard.as_ref().ok_or_else(|| anyhow!("Not connected to QuestDB"))?;
+
+    // 1) Verificar si la tabla existe
+    let table_exists = client
+        .query(
+            "SELECT table_name FROM tables() WHERE lower(table_name) = lower($1)",
+            &[&tbl],
+        )
+        .await?
+        .len() > 0;
+
+    if table_exists {
+        // 2) Verificar columnas que deben ser DOUBLE pero son LONG
+        let cols_to_fix = client
+            .query(
+                r#"
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE lower(table_name) = lower($1) 
+                  AND data_type = 'LONG'
+                  AND column_name IN (
+                    'DesiredAngleRoll', 'DesiredAnglePitch', 'DesiredRateYaw',
+                    'DesiredYaw', 'AngleRoll_est', 'AnglePitch_est',
+                    'AccX', 'AccY', 'AccZ',
+                    'Altura', 'tau_x', 'tau_y', 'tau_z', 'Kc', 'Ki',
+                    'KalmanAngleYaw', 'KalmanAngleRoll', 'KalmanAnglePitch',
+                    'phi_ref', 'theta_ref', 'ErrorYaw',
+                    'g1', 'g2', 'k1', 'k2'
+                  )
+                "#,
+                &[&tbl],
+            )
+            .await?;
+
+        if !cols_to_fix.is_empty() {
+            warn!("🔧 Corrigiendo {} columnas LONG → DOUBLE en tabla '{}'", cols_to_fix.len(), tbl);
+            
+            // 3) Para cada columna incorrecta, hacer ALTER COLUMN
+            for row in &cols_to_fix {
+                let col_name: String = row.get(0);
+                let alter_sql = format!(r#"ALTER TABLE "{}" ALTER COLUMN "{}" TYPE DOUBLE"#, tbl, col_name);
+                match client.execute(&alter_sql, &[]).await {
+                    Ok(_) => info!(" Columna '{}' corregida a DOUBLE", col_name),
+                    Err(e) => warn!(" No se pudo corregir '{}': {}", col_name, e),
+                }
+            }
+        }
+
+        // 4) Verificar columnas faltantes y agregarlas
+        let required_double_cols = [
+            "DesiredAngleRoll", "DesiredAnglePitch", "DesiredRateYaw", "DesiredYaw",
+            "AngleRoll_est", "AnglePitch_est",
+            "AccX", "AccY", "AccZ",
+            "g1", "g2", "k1", "k2",
+            "Altura", "tau_x", "tau_y", "tau_z", "Kc", "Ki",
+            "phi_ref", "theta_ref", "KalmanAngleRoll", "KalmanAnglePitch", "KalmanAngleYaw",
+            "ErrorYaw", "Motor1", "Motor2", "Motor3", "Motor4",
+            "error_phi", "error_theta",
+        ];
+
+        let existing: HashSet<String> = {
+            let rows = client
+                .query(
+                    "SELECT column_name FROM information_schema.columns WHERE lower(table_name) = lower($1)",
+                    &[&tbl],
+                )
+                .await?;
+            let mut set = HashSet::new();
+            for r in rows {
+                set.insert(r.get::<_, String>(0));
+            }
+            set
+        };
+
+        for col in &required_double_cols {
+            if !existing.contains(*col) {
+                let add_sql = format!(r#"ALTER TABLE "{}" ADD COLUMN "{}" DOUBLE"#, tbl, col);
+                match client.execute(&add_sql, &[]).await {
+                    Ok(_) => info!(" Columna '{}' agregada", col),
+                    Err(e) => warn!(" No se pudo agregar '{}': {}", col, e),
+                }
+            }
+        }
+    } else {
+        // 5) Crear tabla desde cero con tipos correctos
         let ddl = format!(r#"
-        CREATE TABLE IF NOT EXISTS "{tbl}" (
+        CREATE TABLE "{tbl}" (
             "{tsc}" TIMESTAMP,
             rx_timestamp_ns LONG,
             flight_id SYMBOL,
             schema_version SYMBOL,
             mode SYMBOL,
             
+            -- Ángulos (todos DOUBLE)
             AngleRoll DOUBLE, AnglePitch DOUBLE, Yaw DOUBLE,
-            RateRoll DOUBLE, RatePitch DOUBLE, RateYaw DOUBLE,
+            AngleRoll_est DOUBLE, AnglePitch_est DOUBLE,
+            KalmanAngleRoll DOUBLE, KalmanAnglePitch DOUBLE, KalmanAngleYaw DOUBLE,
+            DesiredAngleRoll DOUBLE, DesiredAnglePitch DOUBLE, 
+            DesiredRateYaw DOUBLE, DesiredYaw DOUBLE,
             
+            -- Velocidades angulares
+            RateRoll DOUBLE, RatePitch DOUBLE, RateYaw DOUBLE,
             GyroXdps DOUBLE, GyroYdps DOUBLE, GyroZdps DOUBLE,
             
+            -- Acelerómetro
+            AccX DOUBLE, AccY DOUBLE, AccZ DOUBLE,
+            
+            -- Controles (LONG para enteros)
             InputThrottle LONG, InputRoll LONG, InputPitch LONG, InputYaw LONG,
             
+            -- Motores (DOUBLE)
             MotorInput1 DOUBLE, MotorInput2 DOUBLE, MotorInput3 DOUBLE, MotorInput4 DOUBLE,
+            Motor1 DOUBLE, Motor2 DOUBLE, Motor3 DOUBLE, Motor4 DOUBLE,
             
+            -- Errores y referencias
             error_phi DOUBLE, error_theta DOUBLE, ErrorYaw DOUBLE,
-            Altura DOUBLE, tau_x DOUBLE, tau_y DOUBLE, tau_z DOUBLE,
-            Kc DOUBLE, Ki DOUBLE,
+            phi_ref DOUBLE, theta_ref DOUBLE,
             
+            -- Parámetros
+            Altura DOUBLE, 
+            tau_x DOUBLE, tau_y DOUBLE, tau_z DOUBLE,
+            Kc DOUBLE, Ki DOUBLE,
             m DOUBLE, g DOUBLE, k DOUBLE,
-            m1 DOUBLE, m2 DOUBLE, m3 DOUBLE, m4 DOUBLE
-        ) TIMESTAMP("{tsc}") PARTITION BY DAY;
-        
+            m1 DOUBLE, m2 DOUBLE, m3 DOUBLE, m4 DOUBLE,
+            
+            -- Ganancias Kalman
+            g1 DOUBLE, g2 DOUBLE, 
+            k1 DOUBLE, k2 DOUBLE
+        ) TIMESTAMP("{tsc}") PARTITION BY DAY"#);
+
+        client.batch_execute(&ddl).await?;
+        info!("✅ Tabla '{}' creada con tipos correctos", tbl);
+    }
+
+    // 6) Crear otras tablas (sin cambios)
+    let other_tables = format!(r#"
         CREATE TABLE IF NOT EXISTS flight_logs (
             ts TIMESTAMP,
             flight_id SYMBOL,
@@ -355,49 +449,49 @@ impl QuestDb {
             ts TIMESTAMP,
             config_json STRING
         ) TIMESTAMP(ts) PARTITION BY DAY;
+        
         CREATE TABLE IF NOT EXISTS historical_flight_metrics (
-        flight_id SYMBOL,
-        flight_type SYMBOL,
-        timestamp TIMESTAMP,
-        rmse_roll DOUBLE,
-        rmse_pitch DOUBLE,
-        improvement_percent DOUBLE,
-        variance_roll DOUBLE,
-        variance_pitch DOUBLE,
-        itae_roll DOUBLE,
-        itae_pitch DOUBLE,
-        sample_count LONG,
-        duration_sec DOUBLE
-    ) TIMESTAMP(timestamp) PARTITION BY DAY;
-    CREATE TABLE IF NOT EXISTS experiment_metadata (
-        flight_id SYMBOL,
-        experiment_id SYMBOL,
-        start_time TIMESTAMP,
-        end_time TIMESTAMP,
-        duration_seconds DOUBLE,
-        sampling_rate_hz LONG,
-        esp32_loop_hz LONG,
-        filter_type SYMBOL,
-        experiment_type SYMBOL,
-        kalman_k1 DOUBLE,
-        kalman_k2 DOUBLE,
-        kalman_k3 DOUBLE,
-        kalman_g1 DOUBLE,
-        kalman_g2 DOUBLE,
-        kalman_g3 DOUBLE,
-        kalman_m1 DOUBLE,
-        kalman_m2 DOUBLE,
-        kalman_m3 DOUBLE,
-        description STRING,
-        location STRING,
-        notes STRING,
-        created_at TIMESTAMP
-    ) TIMESTAMP(created_at) PARTITION BY DAY;
+            flight_id SYMBOL,
+            flight_type SYMBOL,
+            timestamp TIMESTAMP,
+            rmse_roll DOUBLE,
+            rmse_pitch DOUBLE,
+            improvement_percent DOUBLE,
+            variance_roll DOUBLE,
+            variance_pitch DOUBLE,
+            itae_roll DOUBLE,
+            itae_pitch DOUBLE,
+            sample_count LONG,
+            duration_sec DOUBLE
+        ) TIMESTAMP(timestamp) PARTITION BY DAY;
+        
+        CREATE TABLE IF NOT EXISTS experiment_metadata (
+            flight_id SYMBOL,
+            experiment_id SYMBOL,
+            start_time TIMESTAMP,
+            end_time TIMESTAMP,
+            duration_seconds DOUBLE,
+            sampling_rate_hz LONG,
+            esp32_loop_hz LONG,
+            filter_type SYMBOL,
+            experiment_type SYMBOL,
+            kalman_k1 DOUBLE,
+            kalman_k2 DOUBLE,
+            kalman_k3 DOUBLE,
+            kalman_g1 DOUBLE,
+            kalman_g2 DOUBLE,
+            kalman_g3 DOUBLE,
+            kalman_m1 DOUBLE,
+            kalman_m2 DOUBLE,
+            kalman_m3 DOUBLE,
+            description STRING,
+            location STRING,
+            notes STRING,
+            created_at TIMESTAMP
+        ) TIMESTAMP(created_at) PARTITION BY DAY;
     "#);
-    
-    let guard = self.inner.lock().await;
-    let client = guard.as_ref().ok_or_else(|| anyhow!("Not connected to QuestDB"))?;
-    client.batch_execute(&ddl).await?;
+
+    client.batch_execute(&other_tables).await?;
     Ok(())
 }
     /// Inserta telemetría cruda asociada a un flight_id
@@ -521,7 +615,6 @@ impl QuestDb {
     
         match client.execute(q, &[&"__config__", &config_json]).await {
             Ok(_rows) => {
-                //info!("✅ Config (legacy) guardada en flight_logs (filas: {})", rows);
                 Ok(())
             }
             Err(e) => Err(anyhow::anyhow!(format!(
@@ -588,10 +681,11 @@ impl QuestDb {
                 let query = format!(
                     r#"
                     SELECT "flight_id", max("{tc}") AS last_ts
-                      FROM "{tn}"
-                     GROUP BY "flight_id"
-                     ORDER BY last_ts DESC
-                     LIMIT $1
+                    FROM "{tn}"
+                    WHERE "flight_id" IS NOT NULL
+                    GROUP BY "flight_id"
+                    ORDER BY last_ts DESC
+                    LIMIT $1
                     "#,
                     tc = tc, tn = tn
                 );

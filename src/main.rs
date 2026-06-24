@@ -27,7 +27,6 @@ mod config;
 mod ws_server;
 mod models;
 mod analysis;
-mod simulation;
 
 #[derive(Debug, Clone)]
 struct UdpPacket {
@@ -79,14 +78,23 @@ async fn flush_batch(
     let fid_opt = { flight_state.read().await.clone() };
     if let Some(fid) = fid_opt {
         if !batch.is_empty() {
-            qdb_writer
+            let batch_size = batch.len();
+            match qdb_writer
                 .ingest_telemetry_batch(&fid, "1", None, &*batch, Some("timestamp"))
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to ingest batch: {}", e))?;
-            //tracing::info!(" ILP batch ok: {} rows (flight_id={})", batch.len(), fid);
+            {
+                Ok(count) => {
+                    tracing::info!("✅ ILP batch guardado: {} registros (flight_id={})", count, fid);
+                    batch.clear(); // ← Solo limpiar si se guardó exitosamente
+                }
+                Err(e) => {
+                    tracing::error!("❌ Error guardando batch en QuestDB: {}", e);
+                    // NO limpiar el batch para reintentar
+                }
+            }
         }
+    } else {
     }
-    batch.clear();
     Ok(())
 }
 
@@ -404,8 +412,8 @@ for _ in 0..WORKERS {
     tokio::spawn(async move {
         let mut rxw = rxw;
         
-        const BATCH_MAX: usize = 4000;
-        const BATCH_MS:  u64   = 400;
+        const BATCH_MAX: usize = 10000; // Más grande
+        const BATCH_MS:  u64   = 100;   // Más frecuente (10x/s)
         
         let mut batch: Vec<serde_json::Value> = Vec::with_capacity(BATCH_MAX);
         let mut ticker     = tokio::time::interval(Duration::from_millis(BATCH_MS));
