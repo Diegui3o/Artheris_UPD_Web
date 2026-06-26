@@ -318,9 +318,6 @@ async fn handle_ws_message(
         }
     }
     
-    // Broadcast the message to all connected clients
-    tx.send(text.to_string())?;
-    
     Ok(())
 }
 

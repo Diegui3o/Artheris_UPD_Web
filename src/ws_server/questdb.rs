@@ -204,8 +204,10 @@ impl QuestDb {
                 if k == tf {
                     if let Some(s) = v.as_str() {
                         ts_ns = Some(choose_timestamp_ns(Some(s)));
+                        fields.insert(k.clone(), serde_json::json!(choose_timestamp_ns(Some(s))));
                     } else if let Some(n) = v.as_i64() {
                         ts_ns = Some(n);
+                        fields.insert(k.clone(), serde_json::json!(n));
                     }
                     continue;
                 }

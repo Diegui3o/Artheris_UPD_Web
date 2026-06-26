@@ -80,7 +80,13 @@ async fn flush_batch(
         if !batch.is_empty() {
             let batch_size = batch.len();
             match qdb_writer
-                .ingest_telemetry_batch(&fid, "1", None, &*batch, Some("timestamp"))
+                .ingest_telemetry_batch(
+                    &fid,
+                    "1",
+                    None,
+                    &*batch,
+                    Some("rx_timestamp_ns")
+                )
                 .await
             {
                 Ok(count) => {
@@ -125,7 +131,13 @@ fn extract_numeric_record_and_time(
     // 2) determinar nombres especiales
     let candidate_time_names = [
         time_field_override.unwrap_or(""),
-        "time","timestamp","ts","Time","Timestamp","TS",
+        "rx_timestamp_ns",
+        "time",
+        "timestamp",
+        "ts",
+        "Time",
+        "Timestamp",
+        "TS",
     ];
     let candidate_mode_names = [
         mode_field_override.unwrap_or(""),
@@ -141,6 +153,10 @@ fn extract_numeric_record_and_time(
         // detectar timestamp
         if ts_field.is_none() && candidate_time_names.iter().any(|n| !n.is_empty() && *n == k) {
             ts_field = Some(k.clone());
+
+            // Mantener también el campo
+            fields.insert(k.clone(), val.clone());
+
             continue;
         }
         // detectar modo
@@ -263,7 +279,7 @@ async fn main() -> anyhow::Result<()> {
 
     // --------- UDP ----------
     const LOCAL_PORT: u16 = 8889;
-    const REMOTE_IP: &str = "192.168.1.50";
+    const REMOTE_IP: &str = "192.168.2.50";
     const REMOTE_PORT: u16 = 8888;
 
     let local_addr = format!("0.0.0.0:{}", LOCAL_PORT);
@@ -412,12 +428,15 @@ for _ in 0..WORKERS {
     tokio::spawn(async move {
         let mut rxw = rxw;
         
-        const BATCH_MAX: usize = 10000; // Más grande
+        const BATCH_MAX: usize = 500;
         const BATCH_MS:  u64   = 100;   // Más frecuente (10x/s)
-        
+                
         let mut batch: Vec<serde_json::Value> = Vec::with_capacity(BATCH_MAX);
-        let mut ticker     = tokio::time::interval(Duration::from_millis(BATCH_MS));
+        let mut ticker = tokio::time::interval(Duration::from_millis(BATCH_MS));
         let mut last_flush = Instant::now();
+
+        // NUEVO
+        let mut last_ws_send = Instant::now();
 
         loop {
             tokio::select! {
@@ -443,7 +462,11 @@ for _ in 0..WORKERS {
                     };
     
                     // Broadcast WS sólo si hay subs (evita to_string() caro)
-                    if tx_ws.receiver_count() > 0 {
+                    if tx_ws.receiver_count() > 0
+                        && last_ws_send.elapsed() >= Duration::from_millis(100)
+                    {
+                        last_ws_send = Instant::now();
+
                         let _ = tx_ws.send(normalized.to_string());
                     }
     
